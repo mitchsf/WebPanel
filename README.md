@@ -81,7 +81,7 @@ It is **not** a general-purpose web framework. It serves exactly one form (which
 - **Action buttons.** Trigger arbitrary one-shot operations (reboot, OTA, factory reset) with optional full-screen confirmation overlays.
 - **`showMessage()` from any callback.** Display a custom toast over the form when an action completes or validation fails.
 - **Optional HTTP Basic Auth.** Protect a form with a password via `setAuth()`. The username field is ignored — only the password is checked. Enforced on all requests when the password string is non-empty; disabled when empty.
-- **15 field types.** Dropdowns, ranges, color pickers, time inputs, text/password, checkboxes, radio groups, numeric, hidden, page nav, action buttons, subheadings, separators.
+- **16 field types.** Dropdowns, ranges, color pickers, time inputs, text/password, text input with send button, checkboxes, radio groups, numeric, hidden, page nav, action buttons, subheadings, separators.
 - **Static render buffer.** The entire HTML page (~12–35 KB depending on field count) is built into a single pre-allocated buffer. After `setup()`, no further heap allocation occurs and free memory stays flat.
 
 ## Installation
@@ -180,7 +180,7 @@ If you forget `allocBuffer()`, `begin()` will fall back to allocating it at that
 | Up to ~25 | 16 KB |
 | Up to ~50 | 24 KB |
 | Up to ~80 | 40 KB (default) |
-| 100+ | 64 KB — also bump `WP_MAX_FIELDS` |
+| 100+ | 64 KB — also call `setMaxFields()` |
 
 If you split a long form across multiple pages with `addPage()`, each page renders independently and you can reduce the buffer because the largest individual page is smaller than the total field count.
 
@@ -197,6 +197,11 @@ WiFiServer server(80);
 static void WebPanel::allocBuffer();
 ```
 Allocate the shared HTML render buffer. **Call once, very early in `setup()`** — before WiFi.begin or any other heap activity. Idempotent: safe to call again, no-op if already allocated.
+
+```cpp
+void setMaxFields(int maxFields);
+```
+Set the maximum number of fields for this instance. Call before any `add*()` calls. If not called, defaults to 80. The field array is heap-allocated via `calloc()`, so you only use as much memory as you need. For a small form with 10 fields, call `panel.setMaxFields(20)` to save RAM compared to the default.
 
 ```cpp
 void setTitle(const String& line1, const String& line2 = "");
@@ -303,6 +308,15 @@ void addPassword(const String& label, const String& field, String* ptr,
 ```
 Bound to a `String*`. Value is committed on blur or Enter. Password field includes a "Show" checkbox to toggle visibility. URL-decoded automatically.
 
+#### Text input with send button
+
+```cpp
+void addTextInput(const String& label, const String& field, String* ptr,
+                  const String& placeholder = "", int maxLen = 63,
+                  const String& buttonLabel = "Send", const String& tip = "");
+```
+A text field with an inline action button to the right. Pressing the button (or Enter) sends the value via AJAX and fires the text callback. Unlike `addText()`, value is only sent on explicit submit — not on blur. Use this for command inputs, chat fields, or search boxes where you want the user to confirm before sending. The button label defaults to "Send" but can be customized (e.g. "Go", "Search", "Submit").
+
 #### Time
 
 ```cpp
@@ -357,7 +371,12 @@ A bold subheading with an underline divides field groups visually. A separator i
 ```cpp
 void addPage(const String& line1, const String& line2 = "");
 ```
-Register a new sub-page. Subsequent `add*` calls bind to this page until the next `addPage()` call. The home page is page `-1` and is implicit; you only call `addPage()` to add additional pages.
+Register a new sub-page. Subsequent `add*` calls bind to this page until the next `addPage()` call or a `setHomePage()` call. The home page is page `-1` and is implicit; you only call `addPage()` to add additional pages.
+
+```cpp
+void setHomePage();
+```
+Switch back to the home page so that subsequent `add*()` calls bind to it. Useful when you need to add fields or subheadings to the home page after creating sub-pages.
 
 `line1` is the large header on that sub-page; `line2` is the smaller subtitle. The navigation button label on the home page uses `line2` if non-empty, otherwise `line1`.
 
@@ -487,14 +506,13 @@ panel.addConditionalDropDown(isAdvancedMode, "Debug Level", "dbg",
 Define these before `#include "WebPanel.h"` to override defaults:
 
 ```cpp
-#define WP_MAX_FIELDS         125    // total fields across all pages
 #define WP_MAX_OPTIONS         50    // max options in any single CSV
 #define WP_MAX_PAGES           10    // max sub-pages
 #define WP_HTML_BUFFER_SIZE  40960   // static render buffer (40 KB default)
 #include "WebPanel.h"
 ```
 
-`WP_MAX_FIELDS` is the most likely to need adjustment for large forms.
+The field array is now dynamically allocated on the heap. The default capacity is 80 fields. Call `panel.setMaxFields(N)` before any `add*()` calls to set a custom capacity — use a smaller value to save RAM on simple forms, or a larger value for complex multi-page layouts.
 
 ## Live updates vs Save
 
@@ -527,4 +545,4 @@ MIT. See file headers.
 
 ---
 
-*WebPanel is part of the Zev-7 nixie clock firmware project.*
+*WebPanel is part of the Zev-7 nixie clock and WordClock-5 firmware projects.*
