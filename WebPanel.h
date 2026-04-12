@@ -26,9 +26,7 @@
 #include <WiFiClient.h>
 #include <WiFiServer.h>
 
-#ifndef WP_MAX_FIELDS
-#define WP_MAX_FIELDS 125
-#endif
+#define WP_DEFAULT_FIELDS 80
 
 // Max options parsed at render time (temporary stack array)
 #ifndef WP_MAX_OPTIONS
@@ -63,7 +61,8 @@ enum WPFieldType : uint8_t {
   WP_DROPDOWN_RANGE,
   WP_HIDDEN,
   WP_PAGE_BUTTON,
-  WP_ACTION_BUTTON
+  WP_ACTION_BUTTON,
+  WP_TEXT_INPUT
 };
 
 struct WPField {
@@ -92,10 +91,15 @@ typedef void (*WPTextCallback)(const String& field, const String& value);
 class WebPanel {
 public:
   WebPanel();
+  ~WebPanel();
 
   // Allocate the static HTML render buffer. Call ONCE early in setup()
   // before any other heap activity to prevent fragmentation.
   static void allocBuffer();
+
+  // Set the maximum number of fields for this instance. Call before any
+  // add*() calls. If not called, defaults to WP_DEFAULT_FIELDS (80).
+  void setMaxFields(int maxFields);
 
   // Set the home page header. Two-line variant: line1 (large) + line2 (small).
   // Single-arg variant sets line1 only.
@@ -112,6 +116,7 @@ public:
   // Single-arg variant sets line1 only and leaves line2 empty.
   // The nav button label uses line2 if set, otherwise line1.
   void addPage(const String& line1, const String& line2 = "");
+  void setHomePage();  // switch back to home page for subsequent add* calls
 
   // Action button — always added to the home page (regardless of current
   // page). When clicked it fires the change callback with the given
@@ -155,6 +160,9 @@ public:
                const String& tip = "");
   void addPassword(const String& label, const String& field, String* ptr,
                    const String& tip = "");
+  void addTextInput(const String& label, const String& field, String* ptr,
+                    const String& placeholder = "", int maxLen = 63,
+                    const String& buttonLabel = "Send", const String& tip = "");
   void addCheckbox(const String& label, const String& field, int* preset,
                    const String& tip = "");
   void addRadio(const String& label, const String& field,
@@ -180,8 +188,9 @@ private:
   WPChangeCallback _changeCb;
   WPTextCallback   _textCb;
   String*          _authPass;     // optional — if non-null and non-empty, require HTTP Basic Auth
-  WPField          _fields[WP_MAX_FIELDS];
-  int                _fieldCount;
+  WPField*         _fields;
+  int              _maxFields;
+  int              _fieldCount;
 
   // Page state
   String _pageLine1[WP_MAX_PAGES];   // sub-page large header
@@ -191,6 +200,7 @@ private:
   bool   _mainHasFields;
   bool   _rebootOnSave;
 
+  void ensureFields();  // auto-allocate fields array on first use
   static int countOptions(const String& csv);
   void parseOptions(const String& csv, String out[], int& count);
   void serveForm(WiFiClient& client, int page);
@@ -225,6 +235,7 @@ private:
   void genHidden(int idx);
   void genPageButton(int idx);
   void genActionButton(int idx);
+  void genTextInput(int idx);
 
   // Tooltip helpers — emit info icon (inside label) and floating tooltip
   // box (after label). No-op if the field has no tip text.

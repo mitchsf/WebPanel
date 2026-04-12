@@ -14,9 +14,25 @@ WebPanel::WebPanel()
   : _server(nullptr), _titleLine1("Settings"), _titleLine2(""),
     _pendingMessage(""),
     _saveCb(nullptr), _changeCb(nullptr), _textCb(nullptr), _authPass(nullptr),
-    _fieldCount(0), _numPages(0), _currentPage(-1),
+    _fields(nullptr), _maxFields(0), _fieldCount(0),
+    _numPages(0), _currentPage(-1),
     _mainHasFields(false), _rebootOnSave(false), _htmlPos(0)
 {}
+
+WebPanel::~WebPanel() {
+  free(_fields);
+}
+
+void WebPanel::setMaxFields(int maxFields) {
+  if (_fields) free(_fields);
+  _maxFields = maxFields;
+  _fields = (WPField*)calloc(maxFields, sizeof(WPField));
+  _fieldCount = 0;
+}
+
+void WebPanel::ensureFields() {
+  if (!_fields) setMaxFields(WP_DEFAULT_FIELDS);
+}
 
 void WebPanel::setTitle(const String& line1, const String& line2) {
   _titleLine1 = line1;
@@ -34,6 +50,7 @@ void WebPanel::setRebootOnSave(bool reboot) { _rebootOnSave = reboot; }
 
 void WebPanel::begin(WiFiServer* server) {
   _server = server;
+  ensureFields();
   // Buffer should already be allocated by allocBuffer() at the start of
   // setup() to keep it at the bottom of the heap (no fragmentation).
   // Fall back to allocating here if not.
@@ -124,13 +141,14 @@ void WebPanel::parseOptions(const String& csv, String out[], int& count) {
 
 void WebPanel::addPage(const String& line1, const String& line2) {
   if (_numPages >= WP_MAX_PAGES) return;
+  ensureFields();
 
   // Nav button label: prefer line2 (the page-specific name) if non-empty,
   // otherwise fall back to line1.
   String buttonLabel = (line2.length() > 0) ? line2 : line1;
 
   // Add a page button field on the main page
-  if (_fieldCount < WP_MAX_FIELDS) {
+  if (_fieldCount < _maxFields) {
     WPField& f = _fields[_fieldCount++];
     f.type = WP_PAGE_BUTTON;
     f.label = buttonLabel;
@@ -148,9 +166,15 @@ void WebPanel::addPage(const String& line1, const String& line2) {
   _numPages++;
 }
 
+void WebPanel::setHomePage() {
+  _currentPage = -1;
+}
+
+
 void WebPanel::addActionButton(const String& label, const String& fieldName,
                                 const String& confirmMessage) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_ACTION_BUTTON;
   f.label = label;
@@ -169,7 +193,8 @@ void WebPanel::addActionButton(const String& label, const String& fieldName,
 void WebPanel::addDropDown(const String& label, const String& field,
                                    const String& options, int* preset,
                                    const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_DROPDOWN;
   f.label = label;
@@ -188,7 +213,8 @@ void WebPanel::addDropDown(const String& label, const String& field,
 void WebPanel::addDropDownOffset(const String& label, const String& field,
                                          const String& options, int* preset, int offset,
                                          const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_DROPDOWN_OFFSET;
   f.label = label;
@@ -207,7 +233,8 @@ void WebPanel::addDropDownOffset(const String& label, const String& field,
 void WebPanel::addRange(const String& label, const String& field,
                                 int minVal, int maxVal, int* preset,
                                 const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_RANGE;
   f.label = label;
@@ -225,7 +252,8 @@ void WebPanel::addRange(const String& label, const String& field,
 }
 
 void WebPanel::addSubheading(const String& text) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_SUBHEADING;
   f.label = text;
@@ -236,7 +264,8 @@ void WebPanel::addSubheading(const String& text) {
 }
 
 void WebPanel::addConditionalSubheading(bool (*condition)(), const String& text) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_SUBHEADING;
   f.label = text;
@@ -247,7 +276,8 @@ void WebPanel::addConditionalSubheading(bool (*condition)(), const String& text)
 }
 
 void WebPanel::addSeparator() {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_SEPARATOR;
   f.presetPtr = nullptr;
@@ -258,7 +288,8 @@ void WebPanel::addSeparator() {
 
 void WebPanel::addColorPicker(const String& label, const String& field, int* preset,
                               const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_COLORPICKER;
   f.label = label;
@@ -276,7 +307,8 @@ void WebPanel::addConditionalDropDown(bool (*condition)(),
                                               const String& label, const String& field,
                                               const String& options, int* preset,
                                               const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_DROPDOWN;
   f.label = label;
@@ -297,7 +329,8 @@ void WebPanel::addConditionalDropDown(bool (*condition)(),
 void WebPanel::addText(const String& label, const String& field,
                                String* ptr, const String& placeholder,
                                const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_TEXT;
   f.label = label;
@@ -313,7 +346,8 @@ void WebPanel::addText(const String& label, const String& field,
 
 void WebPanel::addPassword(const String& label, const String& field, String* ptr,
                             const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_PASSWORD;
   f.label = label;
@@ -326,9 +360,30 @@ void WebPanel::addPassword(const String& label, const String& field, String* ptr
   if (_currentPage == -1) _mainHasFields = true;
 }
 
+void WebPanel::addTextInput(const String& label, const String& field, String* ptr,
+                             const String& placeholder, int maxLen,
+                             const String& buttonLabel, const String& tip) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_TEXT_INPUT;
+  f.label = label;
+  f.fieldName = field;
+  f.strPtr = ptr;
+  f.presetPtr = nullptr;
+  f.optionsCSV = placeholder;   // repurpose for placeholder text
+  f.extraText = buttonLabel;
+  f.maxVal = maxLen;
+  f.tip = tip;
+  f.condition = nullptr;
+  f.page = _currentPage;
+  // TextInput has its own Send button — don't trigger Save on home page
+}
+
 void WebPanel::addCheckbox(const String& label, const String& field, int* preset,
                             const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_CHECKBOX;
   f.label = label;
@@ -344,7 +399,8 @@ void WebPanel::addCheckbox(const String& label, const String& field, int* preset
 void WebPanel::addRadio(const String& label, const String& field,
                                 const String& options, int* preset,
                                 const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_RADIO;
   f.label = label;
@@ -363,7 +419,8 @@ void WebPanel::addRadio(const String& label, const String& field,
 void WebPanel::addTime(const String& label, const String& field,
                                int* preset, bool includeSeconds,
                                const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_TIME;
   f.label = label;
@@ -380,7 +437,8 @@ void WebPanel::addTime(const String& label, const String& field,
 void WebPanel::addNumber(const String& label, const String& field,
                                  int minVal, int maxVal, int step, int* preset,
                                  const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_NUMBER;
   f.label = label;
@@ -399,7 +457,8 @@ void WebPanel::addNumber(const String& label, const String& field,
 void WebPanel::addDropDownRange(const String& label, const String& field,
                                         int minVal, int maxVal, int* preset,
                                         const String& tip) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_DROPDOWN_RANGE;
   f.label = label;
@@ -415,7 +474,8 @@ void WebPanel::addDropDownRange(const String& label, const String& field,
 }
 
 void WebPanel::addHidden(const String& field, int* preset) {
-  if (_fieldCount >= WP_MAX_FIELDS) return;
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_HIDDEN;
   f.fieldName = field;
@@ -562,7 +622,7 @@ void WebPanel::handleAjax(WiFiClient& client, const String& req) {
     if (f.fieldName != field) continue;
 
     // Text-based fields: update String pointer
-    if (f.type == WP_TEXT || f.type == WP_PASSWORD) {
+    if (f.type == WP_TEXT || f.type == WP_PASSWORD || f.type == WP_TEXT_INPUT) {
       String decoded = urlDecode(value);
       if (f.strPtr) *f.strPtr = decoded;
       if (_textCb) _textCb(field, decoded);
@@ -713,6 +773,41 @@ void WebPanel::genText(int idx) {
   out(f.fieldName);
   out("',this.value);this.blur();}\">");
   out("</div>");
+}
+
+void WebPanel::genTextInput(int idx) {
+  WPField& f = _fields[idx];
+  const char* val = f.strPtr ? f.strPtr->c_str() : "";
+
+  out("<div class=\"fg\"><label class=\"fl\">");
+  out(f.label);
+  emitTipIcon(idx);
+  out("</label>");
+  emitTipBox(idx);
+  out("<div class=\"tr\"><input type=\"text\" id=\"");
+  out(f.fieldName);
+  out("\" value=\"");
+  out(val);
+  out("\"");
+  if (f.maxVal > 0) {
+    out(" maxlength=\"");
+    out(f.maxVal);
+    out("\"");
+  }
+  if (f.optionsCSV.length() > 0) {
+    out(" placeholder=\"");
+    out(f.optionsCSV);
+    out("\"");
+  }
+  out(" autocomplete=\"off\" autocorrect=\"off\" autocapitalize=\"off\" spellcheck=\"false\"");
+  out(" onkeydown=\"if(event.key==='Enter')sendText('");
+  out(f.fieldName);
+  out("')\">");
+  out("<button class=\"sb\" onclick=\"sendText('");
+  out(f.fieldName);
+  out("')\">");
+  out(f.extraText);
+  out("</button></div></div>");
 }
 
 void WebPanel::genPassword(int idx) {
@@ -1103,6 +1198,15 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("transition:border-color .15s,color .15s;margin-bottom:10px;}");
   out(".back-btn:active{border-color:var(--ts);color:var(--tp);}");
 
+  // -- Text input with send button --
+  out(".tr{display:flex;gap:10px;align-items:center;}");
+  out(".tr input[type=text]{flex:1;height:48px;padding:12px;font-size:1.1rem;");
+  out("border:2px solid var(--br);border-radius:8px;background:var(--cb);outline:none;}");
+  out(".tr input[type=text]:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,0.1);}");
+  out(".sb{height:48px;padding:0 20px;font-size:1.1rem;font-weight:600;color:#fff;");
+  out("background:var(--pc);border:none;border-radius:8px;cursor:pointer;white-space:nowrap;transition:background 0.2s;}");
+  out(".sb:active{background:var(--ph);}");
+
   // -- Save button --
   out(".save-btn{width:100%;padding:12px;font-size:1.05rem;font-weight:700;font-family:inherit;");
   out("color:#fff;background:var(--sc);border:none;border-radius:var(--r);");
@@ -1173,6 +1277,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
       case WP_HIDDEN:           genHidden(i);         break;
       case WP_PAGE_BUTTON:      genPageButton(i);     break;
       case WP_ACTION_BUTTON:    genActionButton(i);   break;
+      case WP_TEXT_INPUT:       genTextInput(i);      break;
     }
   }
 
