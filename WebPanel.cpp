@@ -4,6 +4,7 @@
 
 #include "WebPanel.h"
 #include "mbedtls/base64.h"
+#include <sys/socket.h>
 
 // Static HTML render buffer — allocated once on heap via begin().
 // Shared across all instances.
@@ -488,52 +489,76 @@ void WebPanel::addHidden(const String& field, int* preset) {
 // -- Client handling -----------------------------------------------------
 
 void WebPanel::handleClient() {
-  if (!_server || !_server->hasClient()) return;
+  if (!_server) return;
 
-  WiFiClient client = _server->accept();
-  if (!client) return;
+  // Drain all pending clients — browsers open multiple parallel connections
+  // and ESP32 WiFiServer has a small backlog. Processing only one per call
+  // can starve later connections and make the form unresponsive.
+  while (_server->hasClient()) {
+    WiFiClient client = _server->accept();
+    if (!client) break;
 
-  // Wait briefly for HTTP request data to arrive after TCP handshake.
-  // Without this wait, fast slider drags can drop requests.
-  unsigned long waitStart = millis();
-  while (!client.available() && client.connected() && millis() - waitStart < 200) {
-    delay(1);
-  }
-  if (!client.available()) { client.stop(); return; }
+    // Force immediate socket reclaim on close (RST instead of TIME_WAIT).
+    // ESP32 has ~10 lwIP sockets; without this, TIME_WAIT sockets from
+    // prior page loads exhaust the pool after a few navigations.
+    struct linger so_linger = { 1, 0 };
+    setsockopt(client.fd(), SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
 
-  client.setTimeout(100);
-  String req = client.readStringUntil('\r');
-  String headers = client.readString();
-
-  // Check HTTP Basic Auth if a non-empty password is configured
-  if (_authPass && _authPass->length() > 0 && !checkAuth(headers)) {
-    send401(client);
-    return;
-  }
-
-  if (req.indexOf("/?save=1") >= 0) {
-    handleSave(client);
-    return;
-  }
-
-  if (req.indexOf("/?field=") >= 0) {
-    handleAjax(client, req);
-    return;
-  }
-
-  // Determine page from URL
-  int page = -1;  // main
-  int pageIdx = req.indexOf("GET /page");
-  if (pageIdx >= 0) {
-    int numStart = pageIdx + 9;
-    int spacePos = req.indexOf(' ', numStart);
-    if (spacePos > numStart) {
-      page = req.substring(numStart, spacePos).toInt();
-      if (page < 0 || page >= _numPages) page = -1;
+    // Wait briefly for HTTP request data to arrive after TCP handshake.
+    unsigned long waitStart = millis();
+    while (!client.available() && client.connected() && millis() - waitStart < 200) {
+      delay(1);
     }
-  }
+    if (!client.available()) { client.stop(); continue; }
 
-  serveForm(client, page);
+    client.setTimeout(50);
+    String req = client.readStringUntil('\r');
+
+    // Read just enough headers for auth check, then discard the rest
+    String headers = "";
+    if (_authPass && _authPass->length() > 0) {
+      headers = client.readString();
+      if (!checkAuth(headers)) {
+        send401(client);
+        continue;
+      }
+    } else {
+      // Drain remaining data without storing it
+      while (client.available()) client.read();
+    }
+
+    // Reject favicon and other non-form requests quickly
+    if (req.indexOf("GET / ") < 0 && req.indexOf("GET /?") < 0 && req.indexOf("GET /page") < 0) {
+      client.print("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+      client.flush();
+      client.stop();
+      continue;
+    }
+
+    if (req.indexOf("/?save=1") >= 0) {
+      handleSave(client);
+      continue;
+    }
+
+    if (req.indexOf("/?field=") >= 0) {
+      handleAjax(client, req);
+      continue;
+    }
+
+    // Determine page from URL
+    int page = -1;  // main
+    int pageIdx = req.indexOf("GET /page");
+    if (pageIdx >= 0) {
+      int numStart = pageIdx + 9;
+      int spacePos = req.indexOf(' ', numStart);
+      if (spacePos > numStart) {
+        page = req.substring(numStart, spacePos).toInt();
+        if (page < 0 || page >= _numPages) page = -1;
+      }
+    }
+
+    serveForm(client, page);
+  }
 }
 
 void WebPanel::sendOK(WiFiClient& client) {
