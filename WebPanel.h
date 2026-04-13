@@ -97,6 +97,10 @@ public:
   // before any other heap activity to prevent fragmentation.
   static void allocBuffer();
 
+  // Free the static HTML render buffer (e.g. before OTA to reclaim heap).
+  // allocBuffer() can be called again afterwards to re-allocate.
+  static void freeBuffer();
+
   // Set the maximum number of fields for this instance. Call before any
   // add*() calls. If not called, defaults to WP_DEFAULT_FIELDS (80).
   void setMaxFields(int maxFields);

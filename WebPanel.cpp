@@ -68,6 +68,14 @@ void WebPanel::allocBuffer() {
   }
 }
 
+void WebPanel::freeBuffer() {
+  if (_htmlBuf) {
+    free(_htmlBuf);
+    _htmlBuf = nullptr;
+    _htmlBufSize = 0;
+  }
+}
+
 // -- URL decode ----------------------------------------------------------
 
 // -- HTML buffer append helpers ------------------------------------------
