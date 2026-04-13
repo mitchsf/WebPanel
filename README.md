@@ -18,7 +18,10 @@ void setup() {
   WiFi.softAP("MyDevice");
   WebPanel::allocBuffer();          // call once, early in setup()
   panel.setTitle("My Device", "Settings");
-  panel.setSaveCallback([]() { /* persist to NVS */ });
+  panel.setSaveCallback([]() {
+    /* persist to NVS */
+    server.stop(); delay(50); server.begin();  // reclaim leaked sockets
+  });
   panel.begin(&server);
   server.begin();
 
@@ -55,6 +58,7 @@ That's the entire app. Connect to the device's WiFi, open `http://192.168.4.1`, 
 - [Configuration constants](#configuration-constants)
 - [Live updates vs Save](#live-updates-vs-save)
 - [Limitations](#limitations)
+- [Known issue: ESP32 socket memory leak](#known-issue-esp32-socket-memory-leak)
 - [License](#license)
 
 ---
@@ -118,6 +122,7 @@ void onText(const String& field, const String& value) {
 
 void onSave() {
   Serial.println("Save pressed — write to NVS here");
+  server.stop(); delay(50); server.begin();  // reclaim leaked sockets
 }
 
 void setup() {
@@ -237,7 +242,10 @@ void setup() {
 
   panel.setTitle("My Device", "Settings");
   panel.setAuth(&livePassword);       // protect this form with a password
-  panel.setSaveCallback(onSave);
+  panel.setSaveCallback([]() {
+    onSave();
+    server.stop(); delay(50); server.begin();  // reclaim leaked sockets
+  });
   panel.begin(&server);
   server.begin();
 
@@ -467,6 +475,8 @@ void setSaveCallback(void (*cb)());
 ```
 Fires when the user clicks any "Save Settings" button. Persist your bound variables to NVS / EEPROM here. The browser shows the "✓ Settings Saved" overlay automatically (or a custom overlay if `setRebootOnSave(true)`).
 
+**Important:** Add `server.stop(); delay(50); server.begin();` at the end of your save callback to reclaim leaked sockets. See [Known issue: ESP32 socket memory leak](#known-issue-esp32-socket-memory-leak).
+
 ### Sending messages from callbacks
 
 ```cpp
@@ -538,6 +548,25 @@ You can run both forms in the same project on the same WebPanel instance — jus
 - **No JSON output.** Field values are bound to your variables; the library doesn't expose a JSON dump endpoint. Add one yourself if needed.
 - **Static HTML buffer is fixed-size.** If your rendered page exceeds `WP_HTML_BUFFER_SIZE`, the overflow is silently truncated. Bump the buffer or split into more pages.
 - **Field name parsing is positional.** AJAX requests must arrive in the exact form `/?field=NAME&value=N`. Don't add extra query parameters.
+
+## Known issue: ESP32 socket memory leak
+
+ESP32 Arduino core (3.3.7+) has a memory leak in `NetworkClient` — each HTTP request/response cycle leaks ~500-1000 bytes that are never reclaimed. On memory-constrained ESP32 variants (ESP32-PICO-D4 with ~52 KB free after WiFi), this exhausts the socket pool after ~6-10 page loads, making the form unresponsive while WiFi stays connected.
+
+**Workaround:** Restart the `WiFiServer` in your save callback. The WebPanel "Settings Saved" overlay (3 seconds) blocks user input during the restart, so the fix is seamless:
+
+```cpp
+void onSave() {
+  writeConfig();            // persist to NVS
+  server.stop();            // reclaim all leaked sockets
+  delay(50);
+  server.begin();           // re-open port 80
+}
+```
+
+This reclaims all leaked socket memory at a natural pause point. Without this fix, forms with tooltips or frequent page reloads will become unresponsive within minutes.
+
+**Additional mitigation:** WebPanel stores tooltip strings as `const char*` internally (not `String`) to avoid heap fragmentation from repeated tooltip allocations, which compounds the leak by reducing the memory available for socket buffers.
 
 ## License
 

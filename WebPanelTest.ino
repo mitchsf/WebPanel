@@ -84,6 +84,7 @@ void onText(const String& field, const String& v) {
 
 void onSave() {
   Serial.println("[save] Settings saved");
+  server.stop(); delay(50); server.begin();  // reclaim leaked sockets
 }
 
 // ---------- Conditional field ----------
