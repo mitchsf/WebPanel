@@ -1079,9 +1079,9 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
 
   // -- Header --
   out("#header{background:linear-gradient(135deg,var(--pc),var(--pd));");
-  out("color:#fff;text-align:center;font-size:1.7rem;font-weight:700;");
-  out("padding:8px 24px;letter-spacing:-.3px;line-height:1.1;}");
-  out("#header .hl2{display:block;font-size:1.4rem;font-weight:500;");
+  out("color:#fff;text-align:center;font-size:clamp(1.1rem,5vw,1.7rem);font-weight:700;");
+  out("padding:8px 24px;letter-spacing:-.3px;line-height:1.1;white-space:nowrap;}");
+  out("#header .hl2{display:block;font-size:clamp(0.9rem,4vw,1.4rem);font-weight:500;");
   out("opacity:0.92;margin-top:1px;letter-spacing:0;line-height:1.1;}");
 
   // -- Form area --
