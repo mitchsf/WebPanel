@@ -193,7 +193,7 @@ void WebPanel::addActionButton(const String& label, const String& fieldName,
 
 void WebPanel::addDropDown(const String& label, const String& field,
                                    const String& options, int* preset,
-                                   const String& tip) {
+                                   const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -213,7 +213,7 @@ void WebPanel::addDropDown(const String& label, const String& field,
 
 void WebPanel::addDropDownOffset(const String& label, const String& field,
                                          const String& options, int* preset, int offset,
-                                         const String& tip) {
+                                         const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -233,7 +233,7 @@ void WebPanel::addDropDownOffset(const String& label, const String& field,
 
 void WebPanel::addRange(const String& label, const String& field,
                                 int minVal, int maxVal, int* preset,
-                                const String& tip) {
+                                const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -288,7 +288,7 @@ void WebPanel::addSeparator() {
 }
 
 void WebPanel::addColorPicker(const String& label, const String& field, int* preset,
-                              const String& tip) {
+                              const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -307,7 +307,7 @@ void WebPanel::addColorPicker(const String& label, const String& field, int* pre
 void WebPanel::addConditionalDropDown(bool (*condition)(),
                                               const String& label, const String& field,
                                               const String& options, int* preset,
-                                              const String& tip) {
+                                              const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -329,7 +329,7 @@ void WebPanel::addConditionalDropDown(bool (*condition)(),
 
 void WebPanel::addText(const String& label, const String& field,
                                String* ptr, const String& placeholder,
-                               const String& tip) {
+                               const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -346,7 +346,7 @@ void WebPanel::addText(const String& label, const String& field,
 }
 
 void WebPanel::addPassword(const String& label, const String& field, String* ptr,
-                            const String& tip) {
+                            const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -363,7 +363,7 @@ void WebPanel::addPassword(const String& label, const String& field, String* ptr
 
 void WebPanel::addTextInput(const String& label, const String& field, String* ptr,
                              const String& placeholder, int maxLen,
-                             const String& buttonLabel, const String& tip) {
+                             const String& buttonLabel, const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -382,7 +382,7 @@ void WebPanel::addTextInput(const String& label, const String& field, String* pt
 }
 
 void WebPanel::addCheckbox(const String& label, const String& field, int* preset,
-                            const String& tip) {
+                            const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -399,7 +399,7 @@ void WebPanel::addCheckbox(const String& label, const String& field, int* preset
 
 void WebPanel::addRadio(const String& label, const String& field,
                                 const String& options, int* preset,
-                                const String& tip) {
+                                const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -419,7 +419,7 @@ void WebPanel::addRadio(const String& label, const String& field,
 
 void WebPanel::addTime(const String& label, const String& field,
                                int* preset, bool includeSeconds,
-                               const String& tip) {
+                               const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -437,7 +437,7 @@ void WebPanel::addTime(const String& label, const String& field,
 
 void WebPanel::addNumber(const String& label, const String& field,
                                  int minVal, int maxVal, int step, int* preset,
-                                 const String& tip) {
+                                 const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -457,7 +457,7 @@ void WebPanel::addNumber(const String& label, const String& field,
 
 void WebPanel::addDropDownRange(const String& label, const String& field,
                                         int minVal, int maxVal, int* preset,
-                                        const String& tip) {
+                                        const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -1039,7 +1039,7 @@ void WebPanel::genActionButton(int idx) {
 // Uses event.stopPropagation so the click doesn't bubble to parent label.
 void WebPanel::emitTipIcon(int idx) {
   WPField& f = _fields[idx];
-  if (f.tip.length() == 0) return;
+  if (!f.tip || f.tip[0] == '\0') return;
   out(" <span class=\"info\" onclick=\"event.stopPropagation();tipToggle('");
   out(f.fieldName);
   out("',this)\">&#9432;</span>");
@@ -1048,7 +1048,7 @@ void WebPanel::emitTipIcon(int idx) {
 // Emit the floating tooltip bubble div. No-op if tip empty.
 void WebPanel::emitTipBox(int idx) {
   WPField& f = _fields[idx];
-  if (f.tip.length() == 0) return;
+  if (!f.tip || f.tip[0] == '\0') return;
   out("<div class=\"tt\" id=\"tt_");
   out(f.fieldName);
   out("\">");
@@ -1343,7 +1343,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("var o=document.createElement('div');o.className='saved-overlay';");
   out("o.innerHTML='<div class=\"saved-inner\">'+t+'</div>';");
   out("document.body.appendChild(o);");
-  out("setTimeout(function(){o.style.opacity='0';setTimeout(function(){o.remove();},500);},2000);}");
+  out("setTimeout(function(){o.style.opacity='0';setTimeout(function(){o.remove();},500);},3000);}");
   // Helper: process AJAX response — show overlay if body is not "OK"
   out("function chk(r){return r.text().then(function(m){if(m&&m!=='OK')showMsg(m);});}");
   // Action button "confirm and clear" — fire-and-forget AJAX then replace

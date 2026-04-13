@@ -78,7 +78,7 @@ struct WPField {
   String   fieldName;      // 12 (also serves as HTML id for range sliders)
   String   optionsCSV;     // 12 (parsed at render time)
   String   extraText;      // 12 (placeholder OR buttonLabel — only one used per field type)
-  String   tip;            // 12 (tooltip text — empty = no tooltip icon rendered)
+  const char* tip;          // 4 (tooltip text — nullptr = no tooltip icon rendered)
   int*     presetPtr;      // 4
   String*  strPtr;         // 4
   bool     (*condition)(); // 4
@@ -139,44 +139,44 @@ public:
   // it shows a floating tooltip bubble with the text.
   void addDropDown(const String& label, const String& field,
                    const String& options, int* preset,
-                   const String& tip = "");
+                   const char* tip = nullptr);
   void addDropDownOffset(const String& label, const String& field,
                          const String& options, int* preset, int offset,
-                         const String& tip = "");
+                         const char* tip = nullptr);
   void addRange(const String& label, const String& field,
                 int minVal, int maxVal, int* preset,
-                const String& tip = "");
+                const char* tip = nullptr);
   void addSubheading(const String& text);
   void addConditionalSubheading(bool (*condition)(), const String& text);
   void addColorPicker(const String& label, const String& field, int* preset,
-                      const String& tip = "");
+                      const char* tip = nullptr);
   void addSeparator();
   void addConditionalDropDown(bool (*condition)(),
                                const String& label, const String& field,
                                const String& options, int* preset,
-                               const String& tip = "");
+                               const char* tip = nullptr);
   void addText(const String& label, const String& field, String* ptr,
                const String& placeholder = "",
-               const String& tip = "");
+               const char* tip = nullptr);
   void addPassword(const String& label, const String& field, String* ptr,
-                   const String& tip = "");
+                   const char* tip = nullptr);
   void addTextInput(const String& label, const String& field, String* ptr,
                     const String& placeholder = "", int maxLen = 63,
-                    const String& buttonLabel = "Send", const String& tip = "");
+                    const String& buttonLabel = "Send", const char* tip = nullptr);
   void addCheckbox(const String& label, const String& field, int* preset,
-                   const String& tip = "");
+                   const char* tip = nullptr);
   void addRadio(const String& label, const String& field,
                 const String& options, int* preset,
-                const String& tip = "");
+                const char* tip = nullptr);
   void addTime(const String& label, const String& field, int* preset,
                bool includeSeconds = false,
-               const String& tip = "");
+               const char* tip = nullptr);
   void addNumber(const String& label, const String& field,
                  int minVal, int maxVal, int step, int* preset,
-                 const String& tip = "");
+                 const char* tip = nullptr);
   void addDropDownRange(const String& label, const String& field,
                         int minVal, int maxVal, int* preset,
-                        const String& tip = "");
+                        const char* tip = nullptr);
   void addHidden(const String& field, int* preset);
 
 private:
