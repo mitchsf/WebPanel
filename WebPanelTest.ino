@@ -69,6 +69,13 @@ void onChange(const String& field, int v) {
   else if (field == "reboot") {
     Serial.println("Reboot requested!");
   }
+  else if (field == "ota") {
+    Serial.println("OTA requested — freeing WebPanel buffer for TLS");
+    WebPanel::freeBuffer();     // reclaim ~40 KB for TLS handshake
+    // ... do OTA here ...
+    WebPanel::allocBuffer();    // re-allocate if OTA found no update
+    panel.showMessage("OTA check complete");
+  }
   else if (field == "test") {
     panel.showMessage("Test complete");
   }
@@ -205,6 +212,7 @@ void setup() {
   // Action buttons (always on home page)
   // ============================================================
   panel.addActionButton("Test Buzzer", "test");
+  panel.addActionButton("Check for Update", "ota");
   panel.addActionButton("Reboot", "reboot", "\u2713 Rebooting...");
   panel.addActionButton("Factory Reset", "reset", "Resetting to defaults...");
 

@@ -204,6 +204,17 @@ static void WebPanel::allocBuffer();
 Allocate the shared HTML render buffer. **Call once, very early in `setup()`** — before WiFi.begin or any other heap activity. Idempotent: safe to call again, no-op if already allocated.
 
 ```cpp
+static void WebPanel::freeBuffer();
+```
+Free the shared HTML render buffer, reclaiming ~40 KB of heap. Use this before operations that need large contiguous memory (e.g. OTA updates that require ~40–50 KB for a TLS handshake). Call `allocBuffer()` afterwards to re-allocate the buffer if the device resumes normal operation without rebooting.
+
+```cpp
+WebPanel::freeBuffer();    // reclaim 40 KB for TLS
+doOtaUpdate();             // needs large contiguous heap
+WebPanel::allocBuffer();   // re-allocate if no reboot
+```
+
+```cpp
 void setMaxFields(int maxFields);
 ```
 Set the maximum number of fields for this instance. Call before any `add*()` calls. If not called, defaults to 80. The field array is heap-allocated via `calloc()`, so you only use as much memory as you need. For a small form with 10 fields, call `panel.setMaxFields(20)` to save RAM compared to the default.
