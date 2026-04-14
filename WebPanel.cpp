@@ -59,9 +59,19 @@ void WebPanel::begin(WiFiServer* server) {
 }
 
 // Static — call ONCE from setup() before any other heap activity.
+// Prefers PSRAM when available (ESP32 PICO-V3-02 etc.) so the 40 KB render
+// buffer does not consume scarce internal DRAM. Falls back to DRAM on chips
+// without PSRAM (PICO-D4, PICO-V3).
 void WebPanel::allocBuffer() {
   if (_htmlBuf != nullptr) return;
-  _htmlBuf = (char*)malloc(WP_HTML_BUFFER_SIZE);
+#if defined(BOARD_HAS_PSRAM) || defined(CONFIG_SPIRAM) || defined(CONFIG_SPIRAM_SUPPORT)
+  if (psramFound()) {
+    _htmlBuf = (char*)ps_malloc(WP_HTML_BUFFER_SIZE);
+  }
+#endif
+  if (_htmlBuf == nullptr) {
+    _htmlBuf = (char*)malloc(WP_HTML_BUFFER_SIZE);
+  }
   if (_htmlBuf) {
     _htmlBufSize = WP_HTML_BUFFER_SIZE;
     _htmlBuf[0] = 0;

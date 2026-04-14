@@ -101,6 +101,10 @@ public:
   // allocBuffer() can be called again afterwards to re-allocate.
   static void freeBuffer();
 
+  // Read-only access to the render buffer pointer (for diagnostic logging,
+  // e.g. confirming the buffer landed in PSRAM vs DRAM).
+  static const char* bufferPtr() { return _htmlBuf; }
+
   // Set the maximum number of fields for this instance. Call before any
   // add*() calls. If not called, defaults to WP_DEFAULT_FIELDS (80).
   void setMaxFields(int maxFields);
