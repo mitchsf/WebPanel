@@ -229,9 +229,15 @@ void setSaveCallback(WPSaveCallback cb);     // typedef void (*WPSaveCallback)()
 void setOnChange(WPChangeCallback cb);       // typedef void (*WPChangeCallback)(const String& field, int value);
 void setOnTextChange(WPTextCallback cb);     // typedef void (*WPTextCallback)(const String& field, const String& value);
 void setRebootOnSave(bool reboot);
+void setSliderStyle(int trackHeight, int thumbSize);
 void begin(WiFiServer* server);
 void handleClient();   // call from loop()
 ```
+
+```cpp
+void setSliderStyle(int trackHeight, int thumbSize);
+```
+Set the slider track height and thumb diameter in pixels. Defaults are 6 px track and 22 px thumb. Call before `begin()`. Use this to match a specific visual style — for example, `panel.setSliderStyle(30, 30)` creates chunky pill-shaped sliders similar to the Velleman BrightDot Clock.
 
 ### Authentication
 
@@ -303,9 +309,24 @@ Auto-generates a dropdown of integer values from `minVal` to `maxVal` inclusive.
 ```cpp
 void addRange(const String& label, const String& field,
               int minVal, int maxVal, int* preset,
-              const String& tip = "");
+              const char* tip = nullptr,
+              const char* thumbColor = nullptr);
 ```
 Native HTML5 range slider with the current value displayed in a colored badge to the right. Step size is always 1. The badge updates live as the user drags; the AJAX call fires when the user releases.
+
+The optional `thumbColor` parameter tints the slider thumb and value badge. Three modes:
+
+- **`nullptr`** (default) — uses the theme primary color. Existing code is unchanged.
+- **`"r"`, `"g"`, or `"b"`** — dynamic RGB channel tinting. The thumb color intensity tracks the slider value: at 0 the thumb is black, at 255 it's full red/green/blue. Ideal for R/G/B color sliders.
+- **Any CSS color string** (e.g. `"#ff6600"`, `"orange"`, `"rgb(255,128,0)"`) — fixed thumb color regardless of value. Useful for visually grouping sliders by function.
+
+```cpp
+panel.addRange("Red",        "r",  0, 255, &red,   nullptr, "r");       // dynamic red
+panel.addRange("Green",      "g",  0, 255, &green, nullptr, "g");       // dynamic green
+panel.addRange("Blue",       "b",  0, 255, &blue,  nullptr, "b");       // dynamic blue
+panel.addRange("Warmth",     "w",  0, 100, &warm,  nullptr, "#ff8800"); // fixed orange
+panel.addRange("Brightness", "br", 0, 255, &bri);                       // default theme color
+```
 
 #### Numeric input
 

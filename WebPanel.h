@@ -70,6 +70,7 @@ struct WPField {
   uint8_t  optionCount;    // 1 byte — max WP_MAX_OPTIONS
   int8_t   page;           // 1 byte — -1 = main, 0+ = sub-page index
   bool     includeSeconds; // 1 byte
+  const char* thumbColor;  // 4 bytes — "r","g","b" for channel tint, or CSS color string, or nullptr
   int16_t  minVal;         // 2 bytes
   int16_t  maxVal;         // 2 bytes
   int16_t  step;           // 2 bytes
@@ -117,6 +118,7 @@ public:
   void setOnTextChange(WPTextCallback cb);
   void setRebootOnSave(bool reboot);
   void setAuth(String* password);  // optional HTTP Basic Auth — enforced when *password is non-empty
+  void setSliderStyle(int trackHeight, int thumbSize);  // slider dimensions in px (default: 6px track, 22px thumb)
   void begin(WiFiServer* server);
   void handleClient();
 
@@ -153,7 +155,7 @@ public:
                          const char* tip = nullptr);
   void addRange(const String& label, const String& field,
                 int minVal, int maxVal, int* preset,
-                const char* tip = nullptr);
+                const char* tip = nullptr, const char* thumbColor = nullptr);
   void addSubheading(const String& text);
   void addConditionalSubheading(bool (*condition)(), const String& text);
   void addColorPicker(const String& label, const String& field, int* preset,
@@ -207,6 +209,8 @@ private:
   int    _currentPage;     // page being built: -1 = main
   bool   _mainHasFields;
   bool   _rebootOnSave;
+  int    _sliderTrack;     // track height in px (default 6)
+  int    _sliderThumb;     // thumb diameter in px (default 22)
 
   void ensureFields();  // auto-allocate fields array on first use
   static int countOptions(const String& csv);

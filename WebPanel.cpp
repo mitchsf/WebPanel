@@ -17,7 +17,8 @@ WebPanel::WebPanel()
     _saveCb(nullptr), _changeCb(nullptr), _textCb(nullptr), _authPass(nullptr),
     _fields(nullptr), _maxFields(0), _fieldCount(0),
     _numPages(0), _currentPage(-1),
-    _mainHasFields(false), _rebootOnSave(false), _htmlPos(0)
+    _mainHasFields(false), _rebootOnSave(false),
+    _sliderTrack(6), _sliderThumb(22), _htmlPos(0)
 {}
 
 WebPanel::~WebPanel() {
@@ -48,6 +49,11 @@ void WebPanel::setOnChange(WPChangeCallback cb) { _changeCb = cb; }
 void WebPanel::setOnTextChange(WPTextCallback cb) { _textCb = cb; }
 void WebPanel::setAuth(String* password) { _authPass = password; }
 void WebPanel::setRebootOnSave(bool reboot) { _rebootOnSave = reboot; }
+
+void WebPanel::setSliderStyle(int trackHeight, int thumbSize) {
+  _sliderTrack = trackHeight;
+  _sliderThumb = thumbSize;
+}
 
 void WebPanel::begin(WiFiServer* server) {
   _server = server;
@@ -251,7 +257,7 @@ void WebPanel::addDropDownOffset(const String& label, const String& field,
 
 void WebPanel::addRange(const String& label, const String& field,
                                 int minVal, int maxVal, int* preset,
-                                const char* tip) {
+                                const char* tip, const char* thumbColor) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -265,6 +271,7 @@ void WebPanel::addRange(const String& label, const String& field,
   f.strPtr = nullptr;
   f.offset = 0;
   f.tip = tip;
+  f.thumbColor = thumbColor;
   f.condition = nullptr;
   f.page = _currentPage;
   if (_currentPage == -1) _mainHasFields = true;
@@ -755,8 +762,11 @@ void WebPanel::genRange(int idx) {
   out("\" max=\""); out(f.maxVal);
   out("\" value=\""); out(val);
   out("\" id=\""); out(f.fieldName);
-  out("\" onchange=\"document.getElementById('"); out(f.fieldName);
-  out("_v').textContent=this.value;send('");
+  if (f.thumbColor) {
+    out("\" data-tc=\""); out(f.thumbColor);
+  }
+  out("\" oninput=\"document.getElementById('"); out(f.fieldName);
+  out("_v').textContent=this.value;stc(this)\" onchange=\"send('");
   out(f.fieldName); out("',this.value)\">");
   out("<span class=\"rv\" id=\""); out(f.fieldName); out("_v\">");
   out(val); out("</span>");
@@ -1105,6 +1115,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("--tp:#0f172a;--ts:#64748b;--tl:#94a3b8;");
   out("--br:#e2e8f0;--bf:#3b82f6;");
   out("--r:12px;--ri:10px;");
+  out("--th:"); out(_sliderTrack); out("px;--ts:"); out(_sliderThumb); out("px;");
   out("--sh-sm:0 1px 3px rgba(0,0,0,.08);");
   out("--sh-md:0 4px 12px rgba(0,0,0,.1);");
   out("--sh-lg:0 12px 28px rgba(0,0,0,.12);");
@@ -1169,17 +1180,17 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
 
   // -- Range slider (cross-browser) --
   out(".rc{display:flex;align-items:center;gap:14px;}");
-  out("input[type=range]{flex:1;height:6px;appearance:none;-webkit-appearance:none;");
-  out("background:var(--br);border-radius:3px;outline:none;cursor:pointer;}");
+  out("input[type=range]{flex:1;height:var(--th);appearance:none;-webkit-appearance:none;");
+  out("background:var(--br);border-radius:calc(var(--th)/2);outline:none;cursor:pointer;}");
   out("input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;");
-  out("width:22px;height:22px;background:var(--pc);border-radius:50%;cursor:pointer;");
-  out("box-shadow:0 1px 4px rgba(0,0,0,.2);transition:transform .15s;}");
-  out("input[type=range]::-moz-range-thumb{width:22px;height:22px;background:var(--pc);");
+  out("width:var(--ts);height:var(--ts);background:var(--tc,var(--pc));border-radius:50%;cursor:pointer;");
+  out("box-shadow:0 1px 4px rgba(0,0,0,.2);transition:transform .15s,background .1s;}");
+  out("input[type=range]::-moz-range-thumb{width:var(--ts);height:var(--ts);background:var(--tc,var(--pc));");
   out("border-radius:50%;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2);}");
   out("input[type=range]:active::-webkit-slider-thumb{transform:scale(1.15);}");
   out("input[type=range]:active::-moz-range-thumb{transform:scale(1.15);}");
-  out(".rv{background:var(--pc);color:#fff;padding:2px 10px;border-radius:8px;");
-  out("font-size:.85rem;font-weight:700;min-width:32px;text-align:center;}");
+  out(".rv{background:var(--tc,var(--pc));color:#fff;padding:2px 10px;border-radius:8px;");
+  out("font-size:.85rem;font-weight:700;min-width:32px;text-align:center;transition:background .1s;}");
 
   // -- Color picker (cross-browser) --
   out("input[type=color]{width:100%;height:48px;padding:3px;border:1.5px solid var(--br);");
@@ -1371,6 +1382,12 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
   out("setTimeout(function(){var o=document.querySelector('.saved-overlay');");
   out("if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}");
+  // Slider thumb/badge tinting: data-tc="r|g|b" = dynamic channel, else literal CSS color
+  out("function stc(el){var tc=el.getAttribute('data-tc');if(!tc)return;var v=el.value;");
+  out("var c=tc=='r'?'rgb('+v+',0,0)':tc=='g'?'rgb(0,'+v+',0)':tc=='b'?'rgb(0,0,'+v+')':tc;");
+  out("el.style.setProperty('--tc',c);var b=document.getElementById(el.id+'_v');");
+  out("if(b)b.style.setProperty('--tc',c);}");
+  out("document.querySelectorAll('[data-tc]').forEach(function(el){stc(el);});");
   // Field change senders — all use chk() so showMessage() works universally
   out("function send(f,v){fetch('/?field='+f+'&value='+v).then(chk)}");
   out("function sendStr(f,v){fetch('/?field='+f+'&value='+encodeURIComponent(v)).then(chk)}");
