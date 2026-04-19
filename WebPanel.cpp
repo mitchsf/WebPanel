@@ -966,7 +966,7 @@ void WebPanel::genTime(int idx) {
   out(timeBuf);
   out("\"");
   if (f.includeSeconds) out(" step=\"1\"");
-  out(" onchange=\"var p=this.value.split(':');send('");
+  out(" onblur=\"var p=this.value.split(':');send('");
   out(f.fieldName);
   out("',parseInt(p[0])*100+parseInt(p[1]))\">");
   out("</div>");
