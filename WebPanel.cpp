@@ -1098,8 +1098,10 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     displayLine1 = _pageLine1[page];
     displayLine2 = _pageLine2[page];
   }
-  // Browser title bar shows line2 if present, else line1
-  String docTitle = (displayLine2.length() > 0) ? displayLine2 : displayLine1;
+  // Browser title bar uses line1 only — line2 may contain HTML for the
+  // in-page header, which <title> renders as literal text and browsers
+  // cache into history/autocomplete.
+  String docTitle = displayLine1;
 
   out("<!DOCTYPE html><html lang=\"en\"><head>");
   out("<meta charset=\"UTF-8\">");
