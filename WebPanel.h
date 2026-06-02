@@ -151,9 +151,17 @@ public:
   // It returns to home (not the current sub-page) because device-level status
   // typically lives there. Reboot-and-switch actions should leave it false so
   // the overlay (with reconnect instructions) stays.
+  // If statusField is non-empty (only meaningful with reloadAfter), the poll
+  // hits "/?field=<statusField>" instead of "/?ping=1": its text response is
+  // the action's RESULT. The overlay shows that result for a few seconds
+  // (instead of relying on a status box on the home page) and then navigates
+  // home. A response of "" or "OK" means "no result" → navigate immediately.
+  // The blocking action won't answer the poll until it finishes, so the first
+  // non-error response is the genuine outcome (or a post-reboot empty result).
   void addActionButton(const String& label, const String& fieldName,
                        const String& confirmMessage = "",
-                       bool reloadAfter = false);
+                       bool reloadAfter = false,
+                       const String& statusField = "");
 
   // Display a message overlay in the browser using the same style/animation
   // as the "Settings Saved" overlay. Call from inside any callback (change,

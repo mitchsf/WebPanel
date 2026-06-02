@@ -449,7 +449,8 @@ The home page now shows three nav buttons (Network, Display, Diagnostics) and no
 ```cpp
 void addActionButton(const String& label, const String& fieldName,
                      const String& confirmMessage = "",
-                     bool reloadAfter = false);
+                     bool reloadAfter = false,
+                     const String& statusField = "");
 ```
 
 Action buttons are always added to the **home page**, regardless of which sub-page is currently being built. They fire your change callback with `value=1` when clicked. They do **not** trigger the Save button to appear, so you can have action-only home pages (e.g. a setup page with only "Start" and "Cancel" buttons).
@@ -462,10 +463,13 @@ Two modes:
 
    With `reloadAfter = true`, the overlay does **not** fade to a blank page; instead the page polls the server (1.5 s cadence, 4 s per-try timeout, starting 3 s after the click) and navigates to the **home page** as soon as it answers. Use this for confirm-and-clear actions that **may not reboot** — e.g. an OTA "check for update" that finds the firmware already current, where the UI (and any status message) should come back on its own. It returns to the home page rather than reloading the current sub-page because device-level status/results typically live on the home page; reloading the sub-page the button sits on would never show them. It also handles the reboot case: polling fails until the device is back, then home loads on the new firmware. Leave it `false` for actions that reboot *and* move the device to a different network (e.g. "Switch to AP Mode"), where the same URL won't return and the overlay's reconnect instructions should stay on screen.
 
+   With a non-empty `statusField` (only meaningful alongside `reloadAfter`), the poll hits `/?field=<statusField>` instead of `/?ping=1`, and that field's text response is treated as the action's **result**. Because the blocking action doesn't answer the poll until it has finished, the first non-error reply is the genuine outcome — the overlay shows it for ~5 seconds and then navigates home. This makes the result visible **in the overlay** rather than depending on a home-page status box, the browser cache, or a linger window all lining up. Return `""` (or `"OK"`) from the field to mean "no result" (e.g. after a successful update + reboot), which sends the overlay straight home. Wire the field with `addHidden("<statusField>", &dummyInt)` and answer it in your change callback via `panel.showMessage(resultText)`.
+
 ```cpp
 panel.addActionButton("Start",         "start",  "\u2713 Starting…");
 panel.addActionButton("Factory Reset", "reset",  "Factory reset…");
-panel.addActionButton("Update Firmware", "ota", "Updating…", true);  // confirm-and-clear, then poll + reload
+panel.addActionButton("Update Firmware", "ota", "Updating…", true);             // poll + go home
+panel.addActionButton("Update Firmware", "ota", "Checking…", true, "otastat");  // show result in overlay, then home
 panel.addActionButton("Test Buzzer",   "buzz");  // standard mode
 ```
 

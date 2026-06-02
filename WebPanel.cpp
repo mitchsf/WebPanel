@@ -231,7 +231,8 @@ void WebPanel::setHomePage() {
 
 
 void WebPanel::addActionButton(const String& label, const String& fieldName,
-                                const String& confirmMessage, bool reloadAfter) {
+                                const String& confirmMessage, bool reloadAfter,
+                                const String& statusField) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -240,6 +241,7 @@ void WebPanel::addActionButton(const String& label, const String& fieldName,
   f.fieldName = fieldName;
   f.extraText = confirmMessage;   // reused: confirm message text
   f.reloadAfter = reloadAfter;    // confirm-and-clear: poll+reload instead of fade-to-blank
+  f.optionsCSV = statusField;     // reused (action button): poll field whose response is the result
   f.presetPtr = nullptr;
   f.strPtr = nullptr;
   f.condition = nullptr;
@@ -1328,6 +1330,11 @@ void WebPanel::genActionButton(int idx) {
     out(f.extraText);
     out("\"");
     if (f.reloadAfter) out(" data-reload=\"1\"");
+    if (f.reloadAfter && f.optionsCSV.length() > 0) {
+      out(" data-statusfield=\"");
+      out(f.optionsCSV);
+      out("\"");
+    }
     out(" onclick=\"actionClear('");
     out(f.fieldName);
     out("',this)\"");
@@ -1761,19 +1768,27 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // Action button "confirm and clear" — fire-and-forget AJAX then replace
   // entire body with the confirmation overlay.
   // data-reload set: poll the server (1.5 s cadence, 4 s per-try timeout)
-  //   starting 3 s out, and navigate to the HOME page as soon as it answers.
-  //   Goes home (not location.reload of the current sub-page) because the
-  //   device-level result/status box lives on the home page — reloading the
-  //   sub-page the button sits on would never show it. Covers both the
-  //   no-reboot case (server returns quickly → home comes back) and the
-  //   reboot case (server comes back on new firmware → home loads on it).
+  //   starting 3 s out, then go to the HOME page as soon as it answers. Goes
+  //   home (not location.reload of the current sub-page) because device-level
+  //   status lives on the home page. Covers the no-reboot case (server returns
+  //   quickly) and the reboot case (server comes back on new firmware).
+  //   data-statusfield also set: poll '/?field=<sf>' whose text body is the
+  //   action RESULT. The blocking action doesn't answer until it finishes, so
+  //   the first non-error reply is the real outcome; show it in the overlay
+  //   for ~5 s (so it doesn't depend on a home-page status box / cache / timing
+  //   window), then go home. "" or "OK" means no result → go home at once.
   // data-reload unset: overlay fades out after 2 s (reboot/AP actions whose
   //   message should linger; the server isn't coming back at the same URL).
   out("function actionClear(f,btn){fetch('/?field='+f+'&value=1');");
   out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
-  out("if(btn.dataset.reload){var poll=function(){var c=new AbortController();");
+  out("if(btn.dataset.reload){var sf=btn.dataset.statusfield;");
+  out("var home=function(){location.replace('/');};");
+  out("var show=function(m){var e=document.querySelector('.saved-inner');if(e&&m)e.innerHTML=m;setTimeout(home,m?5000:0);};");
+  out("var poll=function(){var c=new AbortController();");
   out("var t=setTimeout(function(){c.abort();},4000);");
-  out("fetch('/?ping=1',{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace('/');})");
+  out("var u=sf?('/?field='+sf+'&value='+Date.now()):'/?ping=1';");
+  out("fetch(u,{cache:'no-store',signal:c.signal}).then(function(r){clearTimeout(t);");
+  out("if(sf){r.text().then(function(m){show(m&&m!=='OK'?m:'');});}else{home();}})");
   out(".catch(function(){clearTimeout(t);setTimeout(poll,1500);});};setTimeout(poll,3000);return;}");
   out("setTimeout(function(){var o=document.querySelector('.saved-overlay');");
   out("if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}");
