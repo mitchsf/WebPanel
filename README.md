@@ -448,7 +448,8 @@ The home page now shows three nav buttons (Network, Display, Diagnostics) and no
 
 ```cpp
 void addActionButton(const String& label, const String& fieldName,
-                     const String& confirmMessage = "");
+                     const String& confirmMessage = "",
+                     bool reloadAfter = false);
 ```
 
 Action buttons are always added to the **home page**, regardless of which sub-page is currently being built. They fire your change callback with `value=1` when clicked. They do **not** trigger the Save button to appear, so you can have action-only home pages (e.g. a setup page with only "Start" and "Cancel" buttons).
@@ -459,9 +460,12 @@ Two modes:
 
 2. **Confirm-and-clear mode** (`confirmMessage` non-empty): clicks fire a fire-and-forget AJAX call, then immediately replace the entire page with a full-screen confirmation overlay. Use this for actions that reboot the device — the AJAX response will never arrive, so don't wait for one. The overlay fades after 2 seconds.
 
+   With `reloadAfter = true`, the overlay does **not** fade to a blank page; instead the page polls the server (1.5 s cadence, 4 s per-try timeout, starting 3 s after the click) and reloads as soon as it answers. Use this for confirm-and-clear actions that **may not reboot** — e.g. an OTA "check for update" that finds the firmware already current, where the form (and any status message) should come back on its own. It also handles the reboot case: polling fails until the device is back, then reloads into the new firmware. Leave it `false` for actions that reboot *and* move the device to a different network (e.g. "Switch to AP Mode"), where the same URL won't return and the overlay's reconnect instructions should stay on screen.
+
 ```cpp
 panel.addActionButton("Start",         "start",  "\u2713 Starting…");
 panel.addActionButton("Factory Reset", "reset",  "Factory reset…");
+panel.addActionButton("Update Firmware", "ota", "Updating…", true);  // confirm-and-clear, then poll + reload
 panel.addActionButton("Test Buzzer",   "buzz");  // standard mode
 ```
 

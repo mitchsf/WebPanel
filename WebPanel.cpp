@@ -10,6 +10,12 @@
 // Shared across all instances.
 char* WebPanel::_htmlBuf = nullptr;
 int   WebPanel::_htmlBufSize = 0;
+uint32_t WebPanel::_reqOK       = 0;
+uint32_t WebPanel::_reqRejected = 0;
+
+// Static per-request input buffers — reserve()'d once in allocBuffer().
+String WebPanel::_reqBuf;
+String WebPanel::_hdrBuf;
 
 WebPanel::WebPanel()
   : _server(nullptr), _titleLine1("Settings"), _titleLine2(""),
@@ -50,6 +56,25 @@ void WebPanel::setOnTextChange(WPTextCallback cb) { _textCb = cb; }
 void WebPanel::setAuth(String* password) { _authPass = password; }
 void WebPanel::setRebootOnSave(bool reboot) { _rebootOnSave = reboot; }
 
+void WebPanel::gateFieldBy(const char* gatedField,
+                            const char* controllerField,
+                            int32_t enableValue) {
+  // Idempotent: if this gatedField is already registered, update its
+  // controller / value. Otherwise append a new entry.
+  for (int i = 0; i < _gatePairCount; ++i) {
+    if (strcmp(_gatePairs[i].gatedField, gatedField) == 0) {
+      _gatePairs[i].controllerField = controllerField;
+      _gatePairs[i].enableValue     = enableValue;
+      return;
+    }
+  }
+  if (_gatePairCount >= WP_MAX_GATE_PAIRS) return;
+  _gatePairs[_gatePairCount].gatedField      = gatedField;
+  _gatePairs[_gatePairCount].controllerField = controllerField;
+  _gatePairs[_gatePairCount].enableValue     = enableValue;
+  _gatePairCount++;
+}
+
 void WebPanel::setSliderStyle(int trackHeight, int thumbSize) {
   _sliderTrack = trackHeight;
   _sliderThumb = thumbSize;
@@ -82,6 +107,10 @@ void WebPanel::allocBuffer() {
     _htmlBufSize = WP_HTML_BUFFER_SIZE;
     _htmlBuf[0] = 0;
   }
+  // Pre-size input buffers right after the render buffer, while the heap is
+  // still pristine. Each gets one 1 KB allocation, reused across requests.
+  _reqBuf.reserve(1024);
+  _hdrBuf.reserve(1024);
 }
 
 void WebPanel::freeBuffer() {
@@ -164,25 +193,30 @@ void WebPanel::parseOptions(const String& csv, String out[], int& count) {
 
 // -- Page management -----------------------------------------------------
 
-void WebPanel::addPage(const String& line1, const String& line2) {
+void WebPanel::addPage(const String& line1, const String& line2, const String& buttonLabel,
+                       const char* buttonColor) {
   if (_numPages >= WP_MAX_PAGES) return;
   ensureFields();
 
-  // Nav button label: prefer line2 (the page-specific name) if non-empty,
-  // otherwise fall back to line1.
-  String buttonLabel = (line2.length() > 0) ? line2 : line1;
+  // Nav button label priority: explicit buttonLabel arg → line2 → line1.
+  // The explicit-arg path lets callers put rich HTML in line2 (e.g. a flex
+  // header showing version + IP) without that HTML leaking into the button.
+  String chosen = buttonLabel.length() > 0
+                    ? buttonLabel
+                    : (line2.length() > 0 ? line2 : line1);
 
   // Add a page button field on the main page
   if (_fieldCount < _maxFields) {
     WPField& f = _fields[_fieldCount++];
     f.type = WP_PAGE_BUTTON;
-    f.label = buttonLabel;
+    f.label = chosen;
     f.fieldName = "";
     f.presetPtr = nullptr;
     f.strPtr = nullptr;
     f.condition = nullptr;
     f.page = -1;  // button lives on main page
     f.offset = _numPages;  // store page index
+    f.thumbColor = buttonColor;   // optional CSS color override for the nav button
   }
 
   _pageLine1[_numPages] = line1;
@@ -197,7 +231,7 @@ void WebPanel::setHomePage() {
 
 
 void WebPanel::addActionButton(const String& label, const String& fieldName,
-                                const String& confirmMessage) {
+                                const String& confirmMessage, bool reloadAfter) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -205,12 +239,15 @@ void WebPanel::addActionButton(const String& label, const String& fieldName,
   f.label = label;
   f.fieldName = fieldName;
   f.extraText = confirmMessage;   // reused: confirm message text
+  f.reloadAfter = reloadAfter;    // confirm-and-clear: poll+reload instead of fade-to-blank
   f.presetPtr = nullptr;
   f.strPtr = nullptr;
   f.condition = nullptr;
-  f.page = -1;   // always on home page regardless of _currentPage
+  f.page = _currentPage;   // home page (-1) by default; sub-page if inside addPage…setHomePage
   // Do NOT set _mainHasFields — action button does not trigger the
-  // home-page Save button.
+  // home-page Save button. (Sub-page Save buttons are emitted unconditionally
+  // for any sub-page with field content, so action buttons on a sub-page do
+  // not affect that decision either.)
 }
 
 // -- Original field builders (backwards compatible) ----------------------
@@ -350,6 +387,47 @@ void WebPanel::addConditionalDropDown(bool (*condition)(),
   if (_currentPage == -1) _mainHasFields = true;
 }
 
+void WebPanel::addConditionalRange(bool (*condition)(),
+                                   const String& label, const String& field,
+                                   int minVal, int maxVal, int* preset,
+                                   const char* tip, const char* thumbColor) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_RANGE;
+  f.label = label;
+  f.fieldName = field;
+  f.minVal = minVal;
+  f.maxVal = maxVal;
+  f.step = 1;
+  f.presetPtr = preset;
+  f.strPtr = nullptr;
+  f.offset = 0;
+  f.tip = tip;
+  f.thumbColor = thumbColor;
+  f.condition = condition;
+  f.page = _currentPage;
+  if (_currentPage == -1) _mainHasFields = true;
+}
+
+void WebPanel::addConditionalColorPicker(bool (*condition)(),
+                                         const String& label, const String& field,
+                                         int* preset, const char* tip) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_COLORPICKER;
+  f.label = label;
+  f.fieldName = field;
+  f.presetPtr = preset;
+  f.strPtr = nullptr;
+  f.offset = 0;
+  f.tip = tip;
+  f.condition = condition;
+  f.page = _currentPage;
+  if (_currentPage == -1) _mainHasFields = true;
+}
+
 // -- New field types -----------------------------------------------------
 
 void WebPanel::addText(const String& label, const String& field,
@@ -388,7 +466,8 @@ void WebPanel::addPassword(const String& label, const String& field, String* ptr
 
 void WebPanel::addTextInput(const String& label, const String& field, String* ptr,
                              const String& placeholder, int maxLen,
-                             const String& buttonLabel, const char* tip) {
+                             const String& buttonLabel, const char* tip,
+                             int rows, bool clearable) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -400,7 +479,9 @@ void WebPanel::addTextInput(const String& label, const String& field, String* pt
   f.optionsCSV = placeholder;   // repurpose for placeholder text
   f.extraText = buttonLabel;
   f.maxVal = maxLen;
+  f.minVal = (rows < 1) ? 1 : rows;   // repurpose: 1 = input, >1 = textarea rows
   f.tip = tip;
+  f.clearable = clearable;
   f.condition = nullptr;
   f.page = _currentPage;
   // TextInput has its own Send button — don't trigger Save on home page
@@ -511,6 +592,31 @@ void WebPanel::addHidden(const String& field, int* preset) {
   f.page = _currentPage;
 }
 
+void WebPanel::addHTML(String* htmlPtr) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_HTML;
+  f.strPtr = htmlPtr;
+  f.presetPtr = nullptr;
+  f.condition = nullptr;
+  f.page = _currentPage;
+}
+
+void WebPanel::addButton(const String& label, const String& fieldName, const char* tip) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_BUTTON;
+  f.label = label;
+  f.fieldName = fieldName;
+  f.presetPtr = nullptr;
+  f.strPtr = nullptr;
+  f.tip = tip;
+  f.condition = nullptr;
+  f.page = _currentPage;
+}
+
 // -- Client handling -----------------------------------------------------
 
 void WebPanel::handleClient() {
@@ -534,16 +640,41 @@ void WebPanel::handleClient() {
     while (!client.available() && client.connected() && millis() - waitStart < 200) {
       delay(1);
     }
-    if (!client.available()) { client.stop(); continue; }
+    if (!client.available()) { client.stop(); _reqRejected++; continue; }
 
     client.setTimeout(50);
-    String req = client.readStringUntil('\r');
+
+    // Bounded read of the request line into the static _reqBuf. Replaces
+    // String req = readStringUntil('\r') so that we don't pay an alloc/free
+    // pair (and a sequence of realloc copies) per request.
+    _reqBuf = "";
+    {
+      unsigned long lastByte = millis();
+      while (millis() - lastByte < 50) {
+        int c = client.read();
+        if (c < 0) { delay(1); continue; }
+        lastByte = millis();
+        if (c == '\r') break;
+        if (_reqBuf.length() < 1024) _reqBuf += (char)c;
+      }
+    }
+    String& req = _reqBuf;  // alias keeps downstream req.indexOf/substring unchanged
 
     // Read just enough headers for auth check, then discard the rest
-    String headers = "";
     if (_authPass && _authPass->length() > 0) {
-      headers = client.readString();
-      if (!checkAuth(headers)) {
+      _hdrBuf = "";
+      unsigned long lastByte = millis();
+      while (millis() - lastByte < 50) {
+        int c = client.read();
+        if (c < 0) {
+          if (!client.connected()) break;
+          delay(1);
+          continue;
+        }
+        lastByte = millis();
+        if (_hdrBuf.length() < 1024) _hdrBuf += (char)c;
+      }
+      if (!checkAuth(_hdrBuf)) {
         send401(client);
         continue;
       }
@@ -552,21 +683,35 @@ void WebPanel::handleClient() {
       while (client.available()) client.read();
     }
 
-    // Reject favicon and other non-form requests quickly
+    // Minimal diagnostic endpoint. Plain text key=value, stack-local buffer,
+    // no allocator dependency — survives even when the 40 KB render buffer
+    // can't be allocated (which is exactly when you want to read it).
+    if (req.indexOf("GET /health") == 0) {
+      handleHealth(client);
+      continue;
+    }
+
+    // Reject favicon and other non-form requests quickly. Don't count
+    // favicon rejects in _reqRejected — iOS Safari requests /favicon.ico
+    // on every page load and would otherwise inflate the counter with
+    // noise that looks like real failures.
     if (req.indexOf("GET / ") < 0 && req.indexOf("GET /?") < 0 && req.indexOf("GET /page") < 0) {
       client.print("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
       client.flush();
       client.stop();
+      if (req.indexOf("favicon") < 0) _reqRejected++;
       continue;
     }
 
     if (req.indexOf("/?save=1") >= 0) {
       handleSave(client);
+      _reqOK++;
       continue;
     }
 
     if (req.indexOf("/?field=") >= 0) {
       handleAjax(client, req);
+      _reqOK++;
       continue;
     }
 
@@ -583,7 +728,51 @@ void WebPanel::handleClient() {
     }
 
     serveForm(client, page);
+    _reqOK++;
   }
+}
+
+// Plain-text key=value diagnostic dump. Stack-local buffer, no heap.
+// Survives DRAM pressure that would defeat a full form render — which is
+// exactly the failure mode we want to be able to read out remotely.
+void WebPanel::handleHealth(WiFiClient& client) {
+  char body[512];
+  long rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+  int n = snprintf(body, sizeof(body),
+    "freeHeap=%u\n"
+    "minFreeHeap=%u\n"
+    "maxAllocHeap=%u\n"
+    "psramFree=%u\n"
+    "rssi=%ld\n"
+    "uptimeSec=%lu\n"
+    "reqOK=%lu\n"
+    "reqRejected=%lu\n"
+    "wifi=%s\n"
+    "ip=%s\n",
+    (unsigned)ESP.getFreeHeap(),
+    (unsigned)ESP.getMinFreeHeap(),
+    (unsigned)ESP.getMaxAllocHeap(),
+    (unsigned)ESP.getFreePsram(),
+    rssi,
+    (unsigned long)(millis() / 1000UL),
+    (unsigned long)_reqOK,
+    (unsigned long)_reqRejected,
+    (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
+    WiFi.localIP().toString().c_str());
+  if (n < 0) n = 0;
+  if (n >= (int)sizeof(body)) n = sizeof(body) - 1;
+
+  char hdr[192];
+  int hn = snprintf(hdr, sizeof(hdr),
+    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n"
+    "Cache-Control: no-store\r\nConnection: close\r\n\r\n", n);
+  if (hn < 0) hn = 0;
+  if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
+  client.write((const uint8_t*)hdr, hn);
+  client.write((const uint8_t*)body, n);
+  client.flush();
+  client.stop();
+  _reqOK++;
 }
 
 void WebPanel::sendOK(WiFiClient& client) {
@@ -708,6 +897,9 @@ void WebPanel::handleAjax(WiFiClient& client, const String& req) {
     else if (f.type == WP_HIDDEN) {
       if (f.presetPtr) *f.presetPtr = v;
     }
+    else if (f.type == WP_BUTTON) {
+      // Stateless — no preset to update; just fall through to the callback.
+    }
 
     if (_changeCb) _changeCb(field, v);
     break;
@@ -731,7 +923,9 @@ void WebPanel::genDropDown(int idx) {
   emitTipIcon(idx);
   out("</label>");
   emitTipBox(idx);
-  out("<select onchange=\"send('");
+  out("<select id=\"");
+  out(f.fieldName);
+  out("\" onchange=\"send('");
   out(f.fieldName);
   out("',this.value)\">");
 
@@ -765,9 +959,13 @@ void WebPanel::genRange(int idx) {
   if (f.thumbColor) {
     out("\" data-tc=\""); out(f.thumbColor);
   }
+  // Slider value send: use debounced oninput, not onchange. iOS Safari has
+  // a known quirk where the change event on <input type=range> doesn't fire
+  // reliably after a drag-release (it does fire when the track is tapped).
+  // Switching to oninput + a 150 ms debouncer fires regardless, and the
+  // single-flight AbortController in _safeFetch coalesces rapid drags.
   out("\" oninput=\"document.getElementById('"); out(f.fieldName);
-  out("_v').textContent=this.value;stc(this)\" onchange=\"send('");
-  out(f.fieldName); out("',this.value)\">");
+  out("_v').textContent=this.value;stc(this);rng(this)\">");
   out("<span class=\"rv\" id=\""); out(f.fieldName); out("_v\">");
   out(val); out("</span>");
   out("</div></div>");
@@ -794,11 +992,16 @@ void WebPanel::genColorPicker(int idx) {
   emitTipIcon(idx);
   out("</label>");
   emitTipBox(idx);
-  out("<input type=\"color\" value=\"");
-  out(hex);
-  out("\" onchange=\"send('");
+  out("<input type=\"color\" id=\"");
   out(f.fieldName);
-  out("',parseInt(this.value.substring(1),16))\"></div>");
+  out("\" value=\"");
+  out(hex);
+  // oninput drives live preview during selection (Edge keeps the picker
+  // open until commit; relying on onchange alone makes the LED stall
+  // until the user closes the dialog). onchange is kept as a safety net
+  // for any browser that doesn't fire oninput on a color input. clr()
+  // debounces by 150 ms so a single drag doesn't flood the server.
+  out("\" oninput=\"clr(this)\" onchange=\"clr(this)\"></div>");
 }
 
 void WebPanel::genText(int idx) {
@@ -831,17 +1034,39 @@ void WebPanel::genText(int idx) {
 void WebPanel::genTextInput(int idx) {
   WPField& f = _fields[idx];
   const char* val = f.strPtr ? f.strPtr->c_str() : "";
+  int rows = (f.minVal < 1) ? 1 : f.minVal;
+  bool isArea = rows > 1;
 
   out("<div class=\"fg\"><label class=\"fl\">");
   out(f.label);
   emitTipIcon(idx);
   out("</label>");
   emitTipBox(idx);
-  out("<div class=\"tr\"><input type=\"text\" id=\"");
-  out(f.fieldName);
-  out("\" value=\"");
-  out(val);
-  out("\"");
+  // Multi-line mode: stack textarea + button vertically, both full-width.
+  if (isArea) {
+    out("<div class=\"tr\" style=\"display:block\">");
+  } else {
+    out("<div class=\"tr\">");
+  }
+  // Single-line + clearable: wrap the input in a position:relative div so
+  // an absolutely-positioned "x" can sit on the input's right edge (iOS /
+  // Safari search-field style). Only shown when the input has content.
+  bool wrapClear = !isArea && f.clearable;
+  if (wrapClear) out("<div class=\"ti-wrap\">");
+  if (isArea) {
+    out("<textarea class=\"ta\" id=\"");
+    out(f.fieldName);
+    out("\" rows=\"");
+    out(rows);
+    out("\"");
+  } else {
+    out("<input type=\"text\" id=\"");
+    out(f.fieldName);
+    out("\" value=\"");
+    out(val);
+    out("\"");
+    if (wrapClear) out(" class=\"ti-x\"");
+  }
   if (f.maxVal > 0) {
     out(" maxlength=\"");
     out(f.maxVal);
@@ -853,14 +1078,58 @@ void WebPanel::genTextInput(int idx) {
     out("\"");
   }
   out(" autocomplete=\"off\" autocorrect=\"off\" autocapitalize=\"off\" spellcheck=\"false\"");
-  out(" onkeydown=\"if(event.key==='Enter')sendText('");
-  out(f.fieldName);
-  out("')\">");
-  out("<button class=\"sb\" onclick=\"sendText('");
+  if (isArea) {
+    out(">");
+    out(val);                   // textarea content goes between tags
+    out("</textarea>");
+  } else if (wrapClear) {
+    // oninput toggles the X visibility based on value
+    out(" oninput=\"document.getElementById('");
+    out(f.fieldName);
+    out("_x').style.visibility=this.value?'visible':'hidden'\"");
+    out(" onkeydown=\"if(event.key==='Enter')sendText('");
+    out(f.fieldName);
+    out("')\">");
+    // The X — initial display=none if empty, default visible if has value
+    out("<span class=\"cx\" id=\"");
+    out(f.fieldName);
+    out("_x\" style=\"visibility:");
+    out((val && val[0]) ? "visible" : "hidden");
+    out("\" onclick=\"var e=document.getElementById('");
+    out(f.fieldName);
+    out("');e.value='';this.style.visibility='hidden';sendStr('");
+    out(f.fieldName);
+    out("','')\">\xC3\x97</span>");   // UTF-8 multiplication sign (×)
+  } else {
+    out(" onkeydown=\"if(event.key==='Enter')sendText('");
+    out(f.fieldName);
+    out("')\">");
+  }
+  if (wrapClear) out("</div>");
+  if (isArea) {
+    out("<button class=\"sb sb-block\" onclick=\"sendText('");
+  } else {
+    out("<button class=\"sb\" onclick=\"sendText('");
+  }
   out(f.fieldName);
   out("')\">");
   out(f.extraText);
   out("</button></div></div>");
+}
+
+void WebPanel::genHTML(int idx) {
+  WPField& f = _fields[idx];
+  if (f.strPtr) out(*f.strPtr);
+}
+
+void WebPanel::genButton(int idx) {
+  WPField& f = _fields[idx];
+  out("<button class=\"sb sb-block\" onclick=\"send('");
+  out(f.fieldName);
+  out("',1)\">");
+  out(f.label);
+  out("</button>");
+  emitTipBox(idx);
 }
 
 void WebPanel::genPassword(int idx) {
@@ -1004,7 +1273,9 @@ void WebPanel::genDropDownRange(int idx) {
   emitTipIcon(idx);
   out("</label>");
   emitTipBox(idx);
-  out("<select onchange=\"send('");
+  out("<select id=\"");
+  out(f.fieldName);
+  out("\" onchange=\"send('");
   out(f.fieldName);
   out("',this.value)\">");
 
@@ -1034,7 +1305,14 @@ void WebPanel::genPageButton(int idx) {
   WPField& f = _fields[idx];
   out("<a href=\"/page");
   out(f.offset);  // page index
-  out("\" class=\"page-btn\">");
+  out("\" class=\"page-btn\"");
+  if (f.thumbColor != nullptr) {
+    // Optional per-button background color override (addPage's buttonColor arg).
+    out(" style=\"background:");
+    out(f.thumbColor);
+    out(";\"");
+  }
+  out(">");
   out(f.label);
   out("</a>");
 }
@@ -1048,7 +1326,9 @@ void WebPanel::genActionButton(int idx) {
     // the device (response will never arrive anyway).
     out(" data-msg=\"");
     out(f.extraText);
-    out("\" onclick=\"actionClear('");
+    out("\"");
+    if (f.reloadAfter) out(" data-reload=\"1\"");
+    out(" onclick=\"actionClear('");
     out(f.fieldName);
     out("',this)\"");
   } else {
@@ -1064,24 +1344,29 @@ void WebPanel::genActionButton(int idx) {
 
 // -- Tooltip helpers -----------------------------------------------------
 // Emit the info icon (ⓘ) inside the label text. No-op if tip empty.
-// Uses event.stopPropagation so the click doesn't bubble to parent label.
+// stopPropagation stops DOM event bubbling. preventDefault cancels the
+// browser's separate "label-click toggles the associated input" code path
+// — without it, tapping the ⓘ inside a checkbox <label> would still flip
+// the checkbox state.
 void WebPanel::emitTipIcon(int idx) {
   WPField& f = _fields[idx];
   if (!f.tip || f.tip[0] == '\0') return;
-  out(" <span class=\"info\" onclick=\"event.stopPropagation();tipToggle('");
+  out(" <span class=\"info\" onclick=\"event.preventDefault();event.stopPropagation();tipToggle('");
   out(f.fieldName);
   out("',this)\">&#9432;</span>");
 }
 
 // Emit the floating tooltip bubble div. No-op if tip empty.
+// Outer .tt is the sized bubble (flex column); inner .tt-i is the
+// scrollable content area. See the .tt CSS for the Edge bug rationale.
 void WebPanel::emitTipBox(int idx) {
   WPField& f = _fields[idx];
   if (!f.tip || f.tip[0] == '\0') return;
   out("<div class=\"tt\" id=\"tt_");
   out(f.fieldName);
-  out("\">");
+  out("\"><div class=\"tt-i\">");
   out(f.tip);
-  out("</div>");
+  out("</div></div>");
 }
 
 // -- Form rendering ------------------------------------------------------
@@ -1117,26 +1402,54 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("--tp:#0f172a;--ts:#64748b;--tl:#94a3b8;");
   out("--br:#e2e8f0;--bf:#3b82f6;");
   out("--r:12px;--ri:10px;");
-  out("--th:"); out(_sliderTrack); out("px;--ts:"); out(_sliderThumb); out("px;");
+  // NOTE: 'thumb' name (not 'ts') because --ts is already used for
+  // text-secondary color. Reusing --ts here made the thumb width
+  // collapse to an invalid value in dark mode where --ts is set to a
+  // color, causing sliders to be ungrabbable on iPhones in dark mode.
+  out("--th:"); out(_sliderTrack); out("px;--thumb:"); out(_sliderThumb); out("px;");
   out("--sh-sm:0 1px 3px rgba(0,0,0,.08);");
   out("--sh-md:0 4px 12px rgba(0,0,0,.1);");
   out("--sh-lg:0 12px 28px rgba(0,0,0,.12);");
+  out("--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;");
+  // Tooltip surface (GitHub convention: dark in light mode, slightly lighter
+  // dark in dark mode so the bubble pops off the already-dark page).
+  out("--tt-bg:#0f172a;--tt-fg:#ffffff;");
   out("}");
+  // -- Dark mode — redefine the design tokens. Triggers automatically when
+  //    the OS / browser is set to dark.
+  out("@media (prefers-color-scheme:dark){:root{");
+  out("--bg:#0f172a;--cb:#1e293b;");
+  out("--tp:#e2e8f0;--ts:#94a3b8;--tl:#64748b;");
+  out("--br:#334155;");
+  out("--tt-bg:#475569;--tt-fg:#ffffff;");
+  out("--sh-sm:0 1px 3px rgba(0,0,0,.4);");
+  out("--sh-md:0 4px 12px rgba(0,0,0,.5);");
+  out("--sh-lg:0 12px 28px rgba(0,0,0,.6);");
+  out("}}");
 
   // -- Reset & base --
   out("*{box-sizing:border-box;margin:0;padding:0;}");
+  out("html,body{overflow-x:hidden;max-width:100%;}");
+  // Bump the root font-size so all rem-based text scales up ~6%. Container
+  // max-width stays in px so the form's width is unchanged; only text grows.
+  out("html{font-size:17px;}");
   out("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;");
   out("background:var(--bg);color:var(--tp);line-height:1.6;padding:16px;");
   out("-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}");
 
   // -- Container --
+  // overflow:hidden was previously used to clip the header gradient at the
+  // container's rounded corners, but that also clipped absolutely-positioned
+  // tooltips whose bottoms extended past the container. Round the header's
+  // top corners directly so the container can leave overflow visible.
   out("#container{max-width:640px;margin:0 auto;background:var(--cb);");
-  out("border-radius:var(--r);box-shadow:var(--sh-lg);overflow:hidden;}");
+  out("border-radius:var(--r);box-shadow:var(--sh-lg);}");
 
   // -- Header --
   out("#header{background:linear-gradient(135deg,var(--pc),var(--pd));");
   out("color:#fff;text-align:center;font-size:clamp(1.1rem,5vw,1.7rem);font-weight:700;");
-  out("padding:8px 24px;letter-spacing:-.3px;line-height:1.1;white-space:nowrap;}");
+  out("padding:8px 24px;letter-spacing:-.3px;line-height:1.1;white-space:nowrap;");
+  out("border-radius:var(--r) var(--r) 0 0;}");
   out("#header .hl2{display:block;font-size:clamp(0.9rem,4vw,1.4rem);font-weight:500;");
   out("opacity:0.92;margin-top:1px;letter-spacing:0;line-height:1.1;}");
 
@@ -1151,21 +1464,27 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // -- Tooltip info icon and dark bubble tooltip --
   out(".info{display:inline-block;margin-left:6px;font-size:1.1rem;");
   out("color:var(--pc);cursor:pointer;user-select:none;line-height:1;}");
-  // Dark slate bubble — always in DOM, fades in via opacity transition
-  out(".tt{position:absolute;left:0;right:0;z-index:100;");
-  out("background:var(--tp);color:#fff;border:none;border-radius:12px;");
-  out("padding:10px 14px;font-size:.9rem;font-weight:400;");
-  out("text-transform:none;letter-spacing:0;line-height:1.4;");
-  out("box-shadow:0 6px 16px rgba(0,0,0,.25);cursor:pointer;top:1.8rem;");
+  // Dark slate bubble — portal'd to <body> and positioned via JS (position:
+  // fixed, centered horizontally, vertical anchored to icon). Outer .tt is
+  // the flex container; inner .tt-i is the scrollable region with the
+  // scrollbar hidden (the wheel handler drives the scroll explicitly,
+  // which also works around an Edge bug where wheel events over an
+  // overflow:auto element sometimes route to the page underneath).
+  // position:absolute (default) keeps closed tooltips out of document flow;
+  // JS overrides to position:fixed when opening to portal them into body.
+  out(".tt{position:absolute;box-sizing:border-box;z-index:100;");
+  out("background:var(--tt-bg);color:var(--tt-fg);border:none;border-radius:12px;");
+  out("font-size:.9rem;font-weight:400;line-height:1.4;");
+  out("text-transform:none;letter-spacing:0;");
+  out("box-shadow:0 6px 16px rgba(0,0,0,.25);cursor:pointer;");
+  out("display:flex;flex-direction:column;");
   out("opacity:0;visibility:hidden;");
   out("transition:opacity .15s ease,visibility .15s;pointer-events:none;}");
   out(".tt.open{opacity:1;visibility:visible;pointer-events:auto;}");
-  out(".tt.above{top:auto;bottom:100%;margin-bottom:8px;}");
-  // Arrow — single triangle in the dark bubble color
-  out(".tt::before{content:'';position:absolute;top:-8px;left:1.5rem;");
-  out("border:8px solid transparent;border-top:0;border-bottom-color:var(--tp);}");
-  out(".tt.above::before{top:auto;bottom:-8px;");
-  out("border-top:8px solid var(--tp);border-bottom:0;}");
+  out(".tt-i{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;");
+  out("padding:10px 14px;overflow-wrap:anywhere;word-break:break-word;");
+  out("overscroll-behavior:contain;scrollbar-width:none;}");
+  out(".tt-i::-webkit-scrollbar{width:0;height:0;background:transparent;}");
 
   // -- Inputs (shared) --
   out("select,input[type=text],input[type=password],input[type=number],input[type=time]{");
@@ -1185,9 +1504,9 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("input[type=range]{flex:1;height:var(--th);appearance:none;-webkit-appearance:none;");
   out("background:var(--br);border-radius:calc(var(--th)/2);outline:none;cursor:pointer;}");
   out("input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;");
-  out("width:var(--ts);height:var(--ts);background:var(--tc,var(--pc));border-radius:50%;cursor:pointer;");
+  out("width:var(--thumb);height:var(--thumb);background:var(--tc,var(--pc));border-radius:50%;cursor:pointer;");
   out("box-shadow:0 1px 4px rgba(0,0,0,.2);transition:transform .15s,background .1s;}");
-  out("input[type=range]::-moz-range-thumb{width:var(--ts);height:var(--ts);background:var(--tc,var(--pc));");
+  out("input[type=range]::-moz-range-thumb{width:var(--thumb);height:var(--thumb);background:var(--tc,var(--pc));");
   out("border-radius:50%;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2);}");
   out("input[type=range]:active::-webkit-slider-thumb{transform:scale(1.15);}");
   out("input[type=range]:active::-moz-range-thumb{transform:scale(1.15);}");
@@ -1218,6 +1537,30 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("background:var(--pc);border:none;border-radius:var(--ri);cursor:pointer;");
   out("white-space:nowrap;transition:background .15s;}");
   out(".sb:active{background:var(--pd);}");
+  // -- Full-width button modifier (used by addButton and addTextInput's
+  //    Apply button when in textarea mode). Class-based so the buttons in
+  //    those flows don't carry inline style attributes.
+  out(".sb-block{width:100%;display:block;margin:10px 0;}");
+  // -- Inline clear "x" for addTextInput (clearable=true). The input is
+  //    wrapped in .ti-wrap (position:relative) so .cx can sit absolutely
+  //    on the input's right edge. .ti-x adds padding-right on the input
+  //    so the typed text doesn't run under the X. iOS/Safari clear-field
+  //    convention: subtle gray circle, only visible when the input has
+  //    content (toggled by the oninput handler).
+  out(".ti-wrap{position:relative;flex:1;min-width:0;display:flex;align-items:center;}");
+  out(".tr input[type=text].ti-x{padding-right:38px;}");
+  out(".cx{position:absolute;right:10px;top:50%;transform:translateY(-50%);");
+  out("color:var(--tl);font-size:1.25rem;line-height:1;cursor:pointer;");
+  out("user-select:none;-webkit-tap-highlight-color:transparent;");
+  out("padding:4px;transition:color .15s;}");
+  out(".cx:hover{color:var(--ts);}");
+  out(".cx:active{color:var(--tp);}");
+  // -- Textarea (multi-line input, rendered when rows>1 in addTextInput) --
+  out(".ta{width:100%;font-family:var(--mono);font-size:14px;padding:8px;");
+  out("border:1.5px solid var(--br);border-radius:var(--ri);background:var(--cb);");
+  out("color:var(--tp);resize:vertical;box-sizing:border-box;outline:none;");
+  out("transition:border-color .15s,box-shadow .15s;}");
+  out(".ta:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,.15);}");
 
   // -- Password --
   out(".pw{display:flex;align-items:center;gap:10px;}");
@@ -1228,7 +1571,9 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
 
   // -- Checkbox --
   out(".cb-group{margin-bottom:8px;}");
-  out(".cb-label{display:flex;align-items:center;cursor:pointer;");
+  // width:fit-content shrinks the label to just its checkbox + text + icon so
+  // clicks in the empty space to the right of the row don't toggle the input.
+  out(".cb-label{display:flex;align-items:center;cursor:pointer;width:fit-content;max-width:100%;");
   out("font-size:1rem;font-weight:500;color:var(--tp);padding:6px 0;min-height:44px;}");
   out(".cb-label input[type=checkbox]{width:22px;height:22px;margin-right:12px;");
   out("cursor:pointer;accent-color:var(--pc);}");
@@ -1334,6 +1679,8 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
       case WP_PAGE_BUTTON:      genPageButton(i);     break;
       case WP_ACTION_BUTTON:    genActionButton(i);   break;
       case WP_TEXT_INPUT:       genTextInput(i);      break;
+      case WP_HTML:             genHTML(i);           break;
+      case WP_BUTTON:           genButton(i);         break;
     }
   }
 
@@ -1356,14 +1703,44 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // smart above/below positioning based on available space.
   out("function tipToggle(id,btn){");
   out("var c=document.querySelectorAll('.tt.open');");
-  out("for(var i=0;i<c.length;i++){if(c[i].id!=='tt_'+id)c[i].classList.remove('open');}");
+  out("for(var i=0;i<c.length;i++){if(c[i].id!=='tt_'+id){c[i].classList.remove('open');c[i].style.cssText='';}}");
   out("var t=document.getElementById('tt_'+id);if(!t)return;");
-  out("if(t.classList.contains('open')){t.classList.remove('open');return;}");
+  out("if(t.classList.contains('open')){t.classList.remove('open');t.style.cssText='';return;}");
+  // Portal: move tooltip to <body> so no ancestor can clip it. Position
+  // fixed in viewport coords; this side-steps every overflow/positioning
+  // edge case in form / sub-page / container CSS.
+  out("if(t.parentNode!==document.body)document.body.appendChild(t);");
   out("var r=btn.getBoundingClientRect();");
-  out("var below=window.innerHeight-r.bottom,above=r.top;");
-  out("if(below<150&&above>below)t.classList.add('above');");
-  out("else t.classList.remove('above');");
+  out("var vh=window.innerHeight,vw=window.innerWidth,m=16;");
+  out("var below=vh-r.bottom-m,above=r.top-m;");
+  out("var useBelow=below>=above;");
+  out("var avail=useBelow?below:above;");
+  out("var h=Math.max(140,Math.min(Math.floor(vh*0.7),avail));");
+  // Position fixed; pin horizontal width to roughly the form's max width
+  // centered horizontally. Vertical: anchor below icon if room, else above.
+  out("var w=Math.min(vw-32,560);");
+  // Center horizontally over the viewport (same axis as the form container).
+  out("var leftPx=Math.max(16,Math.floor((vw-w)/2));");
+  out("t.style.position='fixed';");
+  out("t.style.left=leftPx+'px';");
+  out("t.style.right='auto';");
+  out("t.style.width=w+'px';");
+  out("t.style.maxHeight=h+'px';");
+  out("if(useBelow){t.style.top=(r.bottom+8)+'px';t.style.bottom='auto';}");
+  out("else{t.style.top='auto';t.style.bottom=(vh-r.top+8)+'px';}");
   out("t.classList.add('open');}");
+  // Edge/Chromium quirk: wheel events over an absolutely-positioned
+  // overflow:auto element sometimes route to the page underneath instead
+  // of the hovering scrollable child, leaving the tooltip unscrollable
+  // even though the content overflows correctly. iOS Safari has no such
+  // problem. Intercept wheel events inside any .tt-i and apply the delta
+  // manually, then preventDefault to stop the page from scrolling.
+  out("document.addEventListener('wheel',function(e){");
+  out("var t=e.target.closest('.tt-i');if(!t)return;");
+  out("var m=t.scrollHeight-t.clientHeight;if(m<=0)return;");
+  out("var n=t.scrollTop+e.deltaY;if(n<0)n=0;if(n>m)n=m;");
+  out("if(n!==t.scrollTop){t.scrollTop=n;e.preventDefault();}");
+  out("},{passive:false});");
   // Close any open tooltip when the user touches the form anywhere outside
   // an info icon. Tapping the tooltip box itself also closes it.
   out("document.addEventListener('click',function(e){");
@@ -1376,12 +1753,25 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("document.body.appendChild(o);");
   out("setTimeout(function(){o.style.opacity='0';setTimeout(function(){o.remove();},500);},3000);}");
   // Helper: process AJAX response — show overlay if body is not "OK"
-  out("function chk(r){return r.text().then(function(m){if(m&&m!=='OK')showMsg(m);});}");
+  out("function chk(r){return r.text().then(function(m){"
+        "if(m&&m.indexOf('::RL::')===0){var msg=m.substr(6);if(msg)showMsg(msg);"
+        "setTimeout(function(){location.reload();},msg?900:120);return;}"
+        "if(m&&m!=='OK')showMsg(m);"
+      "});}");
   // Action button "confirm and clear" — fire-and-forget AJAX then replace
-  // entire body with the confirmation overlay. The overlay fades out after
-  // 2 seconds (same timing as the Settings Saved overlay).
+  // entire body with the confirmation overlay.
+  // data-reload set: poll the server (1.5 s cadence, 4 s per-try timeout)
+  //   starting 3 s out, and reload as soon as it answers. Covers both the
+  //   no-reboot case (server returns quickly → form comes back) and the
+  //   reboot case (server comes back on new firmware → reload into it).
+  // data-reload unset: overlay fades out after 2 s (reboot/AP actions whose
+  //   message should linger; the server isn't coming back at the same URL).
   out("function actionClear(f,btn){fetch('/?field='+f+'&value=1');");
   out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
+  out("if(btn.dataset.reload){var poll=function(){var c=new AbortController();");
+  out("var t=setTimeout(function(){c.abort();},4000);");
+  out("fetch('/?ping=1',{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.reload();})");
+  out(".catch(function(){clearTimeout(t);setTimeout(poll,1500);});};setTimeout(poll,3000);return;}");
   out("setTimeout(function(){var o=document.querySelector('.saved-overlay');");
   out("if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}");
   // Slider thumb/badge tinting: data-tc="r|g|b" = dynamic channel, else literal CSS color
@@ -1390,10 +1780,48 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("el.style.setProperty('--tc',c);var b=document.getElementById(el.id+'_v');");
   out("if(b)b.style.setProperty('--tc',c);}");
   out("document.querySelectorAll('[data-tc]').forEach(function(el){stc(el);});");
-  // Field change senders — all use chk() so showMessage() works universally
-  out("function send(f,v){fetch('/?field='+f+'&value='+v).then(chk)}");
-  out("function sendStr(f,v){fetch('/?field='+f+'&value='+encodeURIComponent(v)).then(chk)}");
-  out("function sendText(id){var m=document.getElementById(id);if(m&&m.value.trim()!=''){fetch('/?field='+id+'&value='+encodeURIComponent(m.value.trim())).then(chk);m.focus();}}");
+  // Field change senders — all use chk() so showMessage() works universally.
+  // _safeFetch wraps the fetch with a 3 s AbortController timeout and a silent
+  // catch. Without these, a single hung request (server busy / WiFi drop) can
+  // tie up Safari's per-origin connection slots (~6) and make subsequent
+  // slider / dropdown changes appear to "stop working" until the browser
+  // gives up ~30 s later. Failed/aborted requests are swallowed silently.
+  out("function _safeFetch(url){var c=new AbortController();");
+  out("var t=setTimeout(function(){c.abort();},3000);");
+  out("return fetch(url,{signal:c.signal}).then(function(r){clearTimeout(t);return chk(r);})");
+  out(".catch(function(){clearTimeout(t);});}");
+  // Per-field debouncer. Range inputs fire oninput continuously during a
+  // drag; coalesce to one send per ~150 ms of inactivity per field. clr()
+  // is the same idea for color pickers — parses '#RRGGBB' to int before
+  // send. Both share _rngT (keyed by field id, no collision).
+  out("var _rngT={};function rng(el){var f=el.id;clearTimeout(_rngT[f]);");
+  out("_rngT[f]=setTimeout(function(){send(f,el.value);},150);}");
+  out("function clr(el){var f=el.id;clearTimeout(_rngT[f]);");
+  out("_rngT[f]=setTimeout(function(){send(f,parseInt(el.value.substring(1),16));},150);}");
+  // Field gating (declared via gateFieldBy()): each entry below makes one
+  // input disabled unless its controller field has the configured value.
+  // No-op when no pairs are registered.
+  if (_gatePairCount > 0) {
+    out("[");
+    for (int i = 0; i < _gatePairCount; ++i) {
+      if (i > 0) out(",");
+      out("{g:'");      out(_gatePairs[i].gatedField);
+      out("',c:'");     out(_gatePairs[i].controllerField);
+      out("',v:");      out(_gatePairs[i].enableValue);
+      out("}");
+    }
+    out("].forEach(function(p){");
+    out("var g=document.getElementById(p.g),c=document.getElementById(p.c);");
+    out("if(!g||!c)return;");
+    out("var fg=g.closest('.fg');");
+    out("function u(){var on=(parseInt(c.value,10)===p.v);");
+    out("if(fg)fg.style.display=on?'':'none';g.disabled=!on;}");
+    out("c.addEventListener('change',u);u();");
+    out("});");
+  }
+  out("function send(f,v){_safeFetch('/?field='+f+'&value='+v);}");
+  out("function sendStr(f,v){_safeFetch('/?field='+f+'&value='+encodeURIComponent(v));}");
+  out("function sendText(id){var m=document.getElementById(id);if(m&&m.value.trim()!=''){_safeFetch('/?field='+id+'&value='+encodeURIComponent(m.value.trim()));m.focus();}}");
   if (_rebootOnSave) {
     out("function save(){fetch('/?save=1');");
     out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">\\u2713 Settings Saved</div></div>';}");
@@ -1405,9 +1833,13 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("</script></body></html>");
 
   // Send headers + body. Use a small char buffer for the headers to avoid String.
-  char headers[96];
+  // Cache-Control: no-store prevents browsers from caching the form HTML, so
+  // that changes to page names / field bindings / etc. take effect on the
+  // next page load instead of waiting for a hard refresh.
+  char headers[160];
   snprintf(headers, sizeof(headers),
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\n"
+    "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
     _htmlPos);
   client.print(headers);
   client.write((const uint8_t*)_htmlBuf, _htmlPos);
