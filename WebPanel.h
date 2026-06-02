@@ -145,10 +145,12 @@ public:
   // If confirmMessage is non-empty, clicking the button replaces the entire
   // page with that message (use for actions that reboot the device).
   // If reloadAfter is true, the page polls the server after showing the
-  // overlay and reloads as soon as it responds again — use for actions that
-  // may NOT reboot (e.g. an OTA check that finds the firmware already current)
-  // so the form comes back instead of fading to a blank page. Reboot actions
-  // should leave it false so the overlay (with reconnect instructions) stays.
+  // overlay and navigates to the HOME page as soon as it responds again — use
+  // for actions that may NOT reboot (e.g. an OTA check that finds the firmware
+  // already current) so the UI comes back instead of fading to a blank page.
+  // It returns to home (not the current sub-page) because device-level status
+  // typically lives there. Reboot-and-switch actions should leave it false so
+  // the overlay (with reconnect instructions) stays.
   void addActionButton(const String& label, const String& fieldName,
                        const String& confirmMessage = "",
                        bool reloadAfter = false);

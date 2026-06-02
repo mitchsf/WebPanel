@@ -1761,16 +1761,19 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // Action button "confirm and clear" — fire-and-forget AJAX then replace
   // entire body with the confirmation overlay.
   // data-reload set: poll the server (1.5 s cadence, 4 s per-try timeout)
-  //   starting 3 s out, and reload as soon as it answers. Covers both the
-  //   no-reboot case (server returns quickly → form comes back) and the
-  //   reboot case (server comes back on new firmware → reload into it).
+  //   starting 3 s out, and navigate to the HOME page as soon as it answers.
+  //   Goes home (not location.reload of the current sub-page) because the
+  //   device-level result/status box lives on the home page — reloading the
+  //   sub-page the button sits on would never show it. Covers both the
+  //   no-reboot case (server returns quickly → home comes back) and the
+  //   reboot case (server comes back on new firmware → home loads on it).
   // data-reload unset: overlay fades out after 2 s (reboot/AP actions whose
   //   message should linger; the server isn't coming back at the same URL).
   out("function actionClear(f,btn){fetch('/?field='+f+'&value=1');");
   out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
   out("if(btn.dataset.reload){var poll=function(){var c=new AbortController();");
   out("var t=setTimeout(function(){c.abort();},4000);");
-  out("fetch('/?ping=1',{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.reload();})");
+  out("fetch('/?ping=1',{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace('/');})");
   out(".catch(function(){clearTimeout(t);setTimeout(poll,1500);});};setTimeout(poll,3000);return;}");
   out("setTimeout(function(){var o=document.querySelector('.saved-overlay');");
   out("if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}");
