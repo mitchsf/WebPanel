@@ -10,6 +10,7 @@
 // Shared across all instances.
 char* WebPanel::_htmlBuf = nullptr;
 int   WebPanel::_htmlBufSize = 0;
+int   WebPanel::_wantBufSize = WP_HTML_BUFFER_SIZE;
 uint32_t WebPanel::_reqOK       = 0;
 uint32_t WebPanel::_reqRejected = 0;
 
@@ -54,6 +55,8 @@ void WebPanel::setSaveCallback(WPSaveCallback cb) { _saveCb = cb; }
 void WebPanel::setOnChange(WPChangeCallback cb) { _changeCb = cb; }
 void WebPanel::setOnTextChange(WPTextCallback cb) { _textCb = cb; }
 void WebPanel::setAuth(String* password) { _authPass = password; }
+void WebPanel::setBufferSize(int bytes) { _wantBufSize = bytes; }
+void WebPanel::setCaptivePortal(bool on) { _captivePortal = on; }
 void WebPanel::setRebootOnSave(bool reboot) { _rebootOnSave = reboot; }
 
 void WebPanel::gateFieldBy(const char* gatedField,
@@ -97,14 +100,14 @@ void WebPanel::allocBuffer() {
   if (_htmlBuf != nullptr) return;
 #if defined(BOARD_HAS_PSRAM) || defined(CONFIG_SPIRAM) || defined(CONFIG_SPIRAM_SUPPORT)
   if (psramFound()) {
-    _htmlBuf = (char*)ps_malloc(WP_HTML_BUFFER_SIZE);
+    _htmlBuf = (char*)ps_malloc(_wantBufSize);
   }
 #endif
   if (_htmlBuf == nullptr) {
-    _htmlBuf = (char*)malloc(WP_HTML_BUFFER_SIZE);
+    _htmlBuf = (char*)malloc(_wantBufSize);
   }
   if (_htmlBuf) {
-    _htmlBufSize = WP_HTML_BUFFER_SIZE;
+    _htmlBufSize = _wantBufSize;
     _htmlBuf[0] = 0;
   }
   // Pre-size input buffers right after the render buffer, while the heap is
@@ -637,6 +640,13 @@ void WebPanel::handleClient() {
     struct linger so_linger = { 1, 0 };
     setsockopt(client.fd(), SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
 
+    // Disable Nagle's algorithm. Without this, the small headers write
+    // followed by the body write gets held by Nagle until the browser's
+    // delayed-ACK fires (~40-200 ms), adding that latency to EVERY response
+    // — every slider drag, dropdown change and page load. Most painful on
+    // no-PSRAM boards where tight lwIP buffering already shrinks the window.
+    client.setNoDelay(true);
+
     // Wait briefly for HTTP request data to arrive after TCP handshake.
     unsigned long waitStart = millis();
     while (!client.available() && client.connected() && millis() - waitStart < 200) {
@@ -662,10 +672,16 @@ void WebPanel::handleClient() {
     }
     String& req = _reqBuf;  // alias keeps downstream req.indexOf/substring unchanged
 
-    // Read just enough headers for auth check, then discard the rest
+    // Read just enough headers for auth check, then discard the rest.
+    // Break the instant we see the blank line that ends the headers
+    // ("\r\n\r\n"); the form only issues GETs, so there's no body to skip.
+    // Previously this loop only exited on a 50 ms idle timeout, adding a
+    // hard ~50 ms floor to EVERY request the moment auth was enabled.
     if (_authPass && _authPass->length() > 0) {
       _hdrBuf = "";
       unsigned long lastByte = millis();
+      const char eohPat[4] = { '\r', '\n', '\r', '\n' };
+      int eoh = 0;  // matched length of the end-of-headers sequence
       while (millis() - lastByte < 50) {
         int c = client.read();
         if (c < 0) {
@@ -675,6 +691,11 @@ void WebPanel::handleClient() {
         }
         lastByte = millis();
         if (_hdrBuf.length() < 1024) _hdrBuf += (char)c;
+        if ((char)c == eohPat[eoh]) {
+          if (++eoh == 4) break;  // blank line — end of headers, stop reading
+        } else {
+          eoh = ((char)c == '\r') ? 1 : 0;
+        }
       }
       if (!checkAuth(_hdrBuf)) {
         send401(client);
@@ -698,6 +719,23 @@ void WebPanel::handleClient() {
     // on every page load and would otherwise inflate the counter with
     // noise that looks like real failures.
     if (req.indexOf("GET / ") < 0 && req.indexOf("GET /?") < 0 && req.indexOf("GET /page") < 0) {
+      if (_captivePortal) {
+        // Captive-portal mode (AP/setup): 302-redirect every non-form request
+        // (the OS connectivity probes to captive.apple.com / generate_204 /
+        // ncsi.txt, plus favicon) to the form root on the AP IP. The phone's
+        // probe getting a redirect instead of its expected success response
+        // is what triggers the "Sign in to network" popup, which then loads
+        // the form. Absolute URL so the captive mini-browser lands on us.
+        char redir[128];
+        snprintf(redir, sizeof(redir),
+          "HTTP/1.1 302 Found\r\nLocation: http://%s/\r\n"
+          "Content-Length: 0\r\nConnection: close\r\n\r\n",
+          WiFi.softAPIP().toString().c_str());
+        client.print(redir);
+        client.flush();
+        client.stop();
+        continue;
+      }
       client.print("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
       client.flush();
       client.stop();
@@ -1437,6 +1475,12 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // -- Reset & base --
   out("*{box-sizing:border-box;margin:0;padding:0;}");
   out("html,body{overflow-x:hidden;max-width:100%;}");
+  // Stop the rubber-band over-scroll past the page's edges (both axes) so long
+  // pages (e.g. the Rule Editor) can't be flung off-screen vertically or panned
+  // sideways — they lock at their natural boundaries like the short pages. (iOS
+  // Safari support for this on the root scroller is version-dependent; harmless
+  // where unsupported.)
+  out("body{overscroll-behavior:none;}");
   // Bump the root font-size so all rem-based text scales up ~6%. Container
   // max-width stays in px so the form's width is unchanged; only text grows.
   out("html{font-size:17px;}");
@@ -1445,12 +1489,16 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}");
 
   // -- Container --
-  // overflow:hidden was previously used to clip the header gradient at the
-  // container's rounded corners, but that also clipped absolutely-positioned
-  // tooltips whose bottoms extended past the container. Round the header's
-  // top corners directly so the container can leave overflow visible.
+  // Clip HORIZONTAL overflow here so a child a few px wider than the viewport
+  // (a width:100% field + padding, or the iOS time input) can't pan the whole
+  // page sideways — iOS Safari doesn't reliably honor overflow-x:hidden on the
+  // root/body scroller, but does on a normal element like this. overflow-x:clip
+  // keeps overflow-y visible (no scroll container) so vertical page scroll is
+  // unchanged; the plain overflow-x:hidden is a fallback for browsers without
+  // clip. Tooltips are unaffected: open ones are position:fixed (escape the
+  // clip) and closed ones are collapsed to zero size.
   out("#container{max-width:640px;margin:0 auto;background:var(--cb);");
-  out("border-radius:var(--r);box-shadow:var(--sh-lg);}");
+  out("border-radius:var(--r);box-shadow:var(--sh-lg);overflow-x:hidden;overflow-x:clip;}");
 
   // -- Header --
   out("#header{background:linear-gradient(135deg,var(--pc),var(--pd));");
@@ -1488,6 +1536,13 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("opacity:0;visibility:hidden;");
   out("transition:opacity .15s ease,visibility .15s;pointer-events:none;}");
   out(".tt.open{opacity:1;visibility:visible;pointer-events:auto;}");
+  // Collapse CLOSED tooltips to zero box height. A closed .tt is position:
+  // absolute and invisible, but its box still extends the page's scrollable
+  // height — and a large tip (e.g. the Rule Editor's full schema doc) creates
+  // a big invisible scroll dead-zone you can scroll the form into / off. Only
+  // closed tips are collapsed; open tips are position:fixed (set by tipToggle)
+  // and unaffected by :not(.open), so this changes nothing about how tips show.
+  out(".tt:not(.open){max-height:0;overflow:hidden;}");
   out(".tt-i{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;");
   out("padding:10px 14px;overflow-wrap:anywhere;word-break:break-word;");
   out("overscroll-behavior:contain;scrollbar-width:none;}");
@@ -1540,7 +1595,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // -- Text input with button --
   out(".tr{display:flex;gap:8px;align-items:center;}");
   out(".tr input[type=text]{flex:1;}");
-  out(".sb{height:48px;padding:0 18px;font-size:.95rem;font-weight:600;color:#fff;font-family:inherit;");
+  out(".sb{height:48px;padding:0 18px;font-size:1.05rem;font-weight:600;color:#fff;font-family:inherit;");
   out("background:var(--pc);border:none;border-radius:var(--ri);cursor:pointer;");
   out("white-space:nowrap;transition:background .15s;}");
   out(".sb:active{background:var(--pd);}");
@@ -1600,7 +1655,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out(".page-btn:active{background:var(--pd);}");
 
   // -- Back button --
-  out(".back-btn{display:block;width:100%;padding:12px;font-size:1rem;font-weight:600;");
+  out(".back-btn{display:block;width:100%;padding:12px;font-size:1.05rem;font-weight:600;");
   out("color:var(--ts);background:var(--bg);border:1.5px solid var(--br);");
   out("border-radius:var(--r);cursor:pointer;text-align:center;text-decoration:none;");
   out("transition:border-color .15s,color .15s;margin-bottom:10px;}");
@@ -1611,7 +1666,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out(".tr input[type=text]{flex:1;height:48px;padding:12px;font-size:1.1rem;");
   out("border:2px solid var(--br);border-radius:8px;background:var(--cb);outline:none;}");
   out(".tr input[type=text]:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,0.1);}");
-  out(".sb{height:48px;padding:0 20px;font-size:1.1rem;font-weight:600;color:#fff;");
+  out(".sb{height:48px;padding:0 20px;font-size:1.05rem;font-weight:600;color:#fff;");
   out("background:var(--pc);border:none;border-radius:8px;cursor:pointer;white-space:nowrap;transition:background 0.2s;}");
   out(".sb:active{background:var(--ph);}");
 
@@ -1623,7 +1678,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out(".save-btn:active{background:var(--sh);}");
 
   // -- Action button (e.g., Start) ---------------------------
-  out(".action-btn{width:100%;padding:14px;font-size:1.1rem;font-weight:700;font-family:inherit;");
+  out(".action-btn{width:100%;padding:14px;font-size:1.05rem;font-weight:700;font-family:inherit;");
   out("color:#fff;background:linear-gradient(135deg,var(--sc),var(--sh));border:none;border-radius:var(--r);");
   out("cursor:pointer;margin-top:18px;box-shadow:var(--sh-md);");
   out("transition:background .15s,box-shadow .15s;}");
@@ -1860,7 +1915,40 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
     _htmlPos);
   client.print(headers);
-  client.write((const uint8_t*)_htmlBuf, _htmlPos);
+  writeAll(client, (const uint8_t*)_htmlBuf, _htmlPos);
   client.flush();
   client.stop();
+}
+
+// Stream a buffer to the client in segment-sized chunks with a progress-based
+// idle timeout. A single client.write() of a large body is bounded by the
+// socket's setTimeout(50) (set for fast request reads), which is far too short
+// to flush a 20-40 KB form over a slow AP link: write() returns short and the
+// response is truncated — the browser renders nothing, while small responses
+// (e.g. /health, one segment) survive. Chunked send keeps pushing as the TCP
+// window drains and only gives up after a real stall, so it can't hang on a
+// dead client.
+void WebPanel::writeAll(WiFiClient& client, const uint8_t* buf, int len) {
+  const int CHUNK = 1460;            // ~one TCP segment
+  int sent = 0;
+  unsigned long start = millis();
+  unsigned long lastProgress = start;
+  // 2 s NO-PROGRESS ceiling. The timer resets on every successful write, so a
+  // healthy or merely-slow (but advancing) client never trips it — it only
+  // bounds how long a genuinely dead/stalled socket can block the caller's
+  // loop(). Kept short so that callers whose loop also services time-critical
+  // work (single-loop clocks under a 30 s software watchdog, NtpServer's UDP
+  // request servicing) aren't stalled long, even if handleClient() drains
+  // several stalled sockets back-to-back in one pass.
+  while (sent < len && client.connected() && millis() - lastProgress < 2000) {
+    int n = len - sent;
+    if (n > CHUNK) n = CHUNK;
+    size_t w = client.write(buf + sent, n);
+    if (w > 0) {
+      sent += (int)w;
+      lastProgress = millis();       // reset idle timer on any forward progress
+    } else {
+      delay(2);                      // window full — let it drain, then retry
+    }
+  }
 }

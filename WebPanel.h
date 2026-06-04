@@ -122,6 +122,13 @@ public:
   void setOnTextChange(WPTextCallback cb);
   void setRebootOnSave(bool reboot);
   void setAuth(String* password);  // optional HTTP Basic Auth — enforced when *password is non-empty
+  static void setBufferSize(int bytes);  // override render-buffer size (call BEFORE allocBuffer()).
+                                         // Shrinking it frees DRAM for the WiFi/TCP TX path on
+                                         // no-PSRAM boards, where a too-large buffer can starve the
+                                         // send side and stall large responses. Default WP_HTML_BUFFER_SIZE.
+  void setCaptivePortal(bool on);  // AP/setup mode: 302-redirect any non-form request to the form root
+                                   // so OS connectivity probes trigger the "Sign in to network" popup.
+                                   // Default off — STA/runtime forms are unaffected.
   void setSliderStyle(int trackHeight, int thumbSize);  // slider dimensions in px (default: 6px track, 22px thumb)
   void begin(WiFiServer* server);
   void handleClient();
@@ -267,6 +274,7 @@ private:
   WPChangeCallback _changeCb;
   WPTextCallback   _textCb;
   String*          _authPass;     // optional — if non-null and non-empty, require HTTP Basic Auth
+  bool             _captivePortal = false;  // AP captive-portal redirect (see setCaptivePortal)
   WPField*         _fields;
   int              _maxFields;
   int              _fieldCount;
@@ -298,6 +306,7 @@ private:
   static int countOptions(const String& csv);
   void parseOptions(const String& csv, String out[], int& count);
   void serveForm(WiFiClient& client, int page);
+  void writeAll(WiFiClient& client, const uint8_t* buf, int len);  // chunked, slow-link-safe body send
   void handleAjax(WiFiClient& client, const String& req);
   void handleSave(WiFiClient& client);
   void handleHealth(WiFiClient& client);
@@ -311,6 +320,7 @@ private:
   // all instances. A single early allocation doesn't fragment the heap.
   static char* _htmlBuf;
   static int   _htmlBufSize;
+  static int   _wantBufSize;   // desired render-buffer size; set via setBufferSize() before allocBuffer()
   int          _htmlPos;
 
   // Per-request input buffers — static so they're reserve()'d once and the
