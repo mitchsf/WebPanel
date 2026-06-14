@@ -1417,6 +1417,29 @@ void WebPanel::emitTipBox(int idx) {
 // -- Form rendering ------------------------------------------------------
 
 void WebPanel::serveForm(WiFiClient& client, int page) {
+  // The render buffer may be null here: freeBuffer() is called before an OTA
+  // TLS handshake to reclaim heap, and a subsequent allocBuffer() can fail to
+  // re-acquire a large contiguous block on a fragmented/low (no-PSRAM) heap.
+  // Try to (re)allocate; if it's still null, serve a tiny auto-refreshing page
+  // instead of writing through null below (which faults as StoreProhibited).
+  // This self-heals: once the heap recovers (e.g. the OTA TLS client is torn
+  // down), the next poll's allocBuffer() succeeds and the full form renders.
+  if (!_htmlBuf) allocBuffer();
+  if (!_htmlBuf) {
+    const char* body = "<!DOCTYPE html><meta http-equiv=\"refresh\" content=\"3\">"
+                       "<body style=\"font-family:sans-serif\">Low memory \xE2\x80\x94 retrying\xE2\x80\xA6</body>";
+    int blen = strlen(body);
+    char headers[160];
+    int hn = snprintf(headers, sizeof(headers),
+      "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html\r\n"
+      "Content-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", blen);
+    client.write((const uint8_t*)headers, hn);
+    client.write((const uint8_t*)body, blen);
+    client.flush();
+    client.stop();
+    return;
+  }
+
   // Reset the static buffer
   _htmlPos = 0;
   _htmlBuf[0] = 0;
