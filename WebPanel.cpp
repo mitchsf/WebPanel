@@ -1817,7 +1817,8 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // Helper: process AJAX response — show overlay if body is not "OK"
   out("function chk(r){return r.text().then(function(m){"
         "if(m&&m.indexOf('::RL::')===0){var msg=m.substr(6);if(msg)showMsg(msg);"
-        "setTimeout(function(){location.reload();},msg?900:120);return;}"
+        "try{sessionStorage.setItem('wpsy',window.scrollY);}catch(e){}"
+        "setTimeout(function(){location.replace(location.href);},msg?900:120);return;}"
         "if(m&&m!=='OK')showMsg(m);"
       "});}");
   // Action button "confirm and clear" — fire-and-forget AJAX then replace
@@ -1837,7 +1838,13 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("function actionClear(f,btn){fetch('/?field='+f+'&value=1');");
   out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
   out("if(btn.dataset.reload){var sf=btn.dataset.statusfield;");
-  out("var home=function(){location.replace('/');};");
+  // Go HOME, but wait until the device is actually serving again before
+  // navigating — a successful OTA reboots, so a blind redirect would land
+  // mid-reboot, fail, and strand the user on the sub-page. Ping '/' until it
+  // answers, then replace to home. No-reboot actions (already current) answer
+  // immediately, so this is effectively instant for them.
+  out("var home=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
+  out("fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace('/');}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};");
   out("var show=function(m){var e=document.querySelector('.saved-inner');if(e&&m)e.innerHTML=m;setTimeout(home,m?5000:0);};");
   out("var poll=function(){var c=new AbortController();");
   out("var t=setTimeout(function(){c.abort();},4000);");
@@ -1903,6 +1910,10 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("function save(){fetch('/?save=1').then(function(r){return r.text();}).then(function(m){");
     out("var t=(m&&m!=='OK')?m:'\\u2713 Settings Saved';showMsg(t);});}");
   }
+  // After a chk()-triggered reload (rule add/edit/delete) restore the scroll
+  // position so the form doesn't jump to the top, and scrollTo(0,...) re-pins
+  // horizontal to 0 so the left-right lock is honored. One-shot (key removed).
+  out("try{var _y=sessionStorage.getItem('wpsy');if(_y!==null){sessionStorage.removeItem('wpsy');window.scrollTo(0,parseInt(_y)||0);}}catch(e){}");
   out("</script></body></html>");
 
   // Send headers + body. Use a small char buffer for the headers to avoid String.
