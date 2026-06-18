@@ -120,7 +120,11 @@ public:
   void setSaveCallback(WPSaveCallback cb);
   void setOnChange(WPChangeCallback cb);
   void setOnTextChange(WPTextCallback cb);
-  void setRebootOnSave(bool reboot);
+  // Save button: when reboot is true the JS shows the "Settings Saved" overlay
+  // immediately (the device is expected to reboot in the save callback). The
+  // optional saveLabel overrides the default "Save Settings" button text on
+  // both the home page and sub-pages — pass "" (default) to keep it unchanged.
+  void setRebootOnSave(bool reboot, const String& saveLabel = "");
   void setAuth(String* password);  // optional HTTP Basic Auth — enforced when *password is non-empty
   static void setBufferSize(int bytes);  // override render-buffer size (call BEFORE allocBuffer()).
                                          // Shrinking it frees DRAM for the WiFi/TCP TX path on
@@ -286,6 +290,7 @@ private:
   int    _currentPage;     // page being built: -1 = main
   bool   _mainHasFields;
   bool   _rebootOnSave;
+  String _saveLabel;       // overrides "Save Settings" button text when non-empty
   int    _sliderTrack;     // track height in px (default 6)
   int    _sliderThumb;     // thumb diameter in px (default 22)
 

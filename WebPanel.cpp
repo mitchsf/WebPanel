@@ -24,7 +24,7 @@ WebPanel::WebPanel()
     _saveCb(nullptr), _changeCb(nullptr), _textCb(nullptr), _authPass(nullptr),
     _fields(nullptr), _maxFields(0), _fieldCount(0),
     _numPages(0), _currentPage(-1),
-    _mainHasFields(false), _rebootOnSave(false),
+    _mainHasFields(false), _rebootOnSave(false), _saveLabel(""),
     _sliderTrack(6), _sliderThumb(22), _htmlPos(0)
 {}
 
@@ -57,7 +57,7 @@ void WebPanel::setOnTextChange(WPTextCallback cb) { _textCb = cb; }
 void WebPanel::setAuth(String* password) { _authPass = password; }
 void WebPanel::setBufferSize(int bytes) { _wantBufSize = bytes; }
 void WebPanel::setCaptivePortal(bool on) { _captivePortal = on; }
-void WebPanel::setRebootOnSave(bool reboot) { _rebootOnSave = reboot; }
+void WebPanel::setRebootOnSave(bool reboot, const String& saveLabel) { _rebootOnSave = reboot; _saveLabel = saveLabel; }
 
 void WebPanel::gateFieldBy(const char* gatedField,
                             const char* controllerField,
@@ -1770,15 +1770,20 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   }
 
   // Buttons
+  const char* saveTxt = _saveLabel.length() ? _saveLabel.c_str() : "Save Settings";
   if (page == -1) {
     if (_mainHasFields) {
       out("<div class=\"sep\"></div>");
-      out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">Save Settings</button>");
+      out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
+      out(saveTxt);
+      out("</button>");
     }
   } else {
     out("<div class=\"sep\"></div>");
     out("<a href=\"/\" class=\"back-btn\">Back</a>");
-    out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">Save Settings</button>");
+    out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
+    out(saveTxt);
+    out("</button>");
   }
 
   out("</div></div>");
