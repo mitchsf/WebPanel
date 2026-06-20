@@ -622,6 +622,12 @@ void WebPanel::addButton(const String& label, const String& fieldName, const cha
   f.page = _currentPage;
 }
 
+void WebPanel::setFieldLabel(const String& fieldName, const String& label) {
+  for (int i = 0; i < _fieldCount; i++) {
+    if (_fields[i].fieldName == fieldName) { _fields[i].label = label; return; }
+  }
+}
+
 // -- Client handling -----------------------------------------------------
 
 void WebPanel::handleClient() {

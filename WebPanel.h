@@ -246,6 +246,12 @@ public:
   void addButton(const String& label, const String& fieldName,
                  const char* tip = nullptr);
 
+  // Change a field's visible label by field name. The label String is re-read
+  // on every page render, so the new text appears on the next request/reload
+  // (use a "::RL::" showMessage to force that reload). Useful for buttons that
+  // toggle state (e.g. Start/Stop). No-op if the field name isn't found.
+  void setFieldLabel(const String& fieldName, const String& label);
+
   // Inject raw HTML into the page at the position of this call.
   // The HTML is written verbatim to the page (no escaping). Use for
   // custom widgets like tables, charts, or status displays the
