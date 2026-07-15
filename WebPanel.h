@@ -92,6 +92,11 @@ struct WPField {
 typedef void (*WPSaveCallback)();
 typedef void (*WPChangeCallback)(const String& field, int value);
 typedef void (*WPTextCallback)(const String& field, const String& value);
+// Custom-route handler — invoked when an incoming request path matches a prefix
+// registered via addRoute(). Handler owns the full HTTP response (status line,
+// headers, body) and MUST write it to `client`. `path` is the request path
+// (no query string); `query` is the raw query string after '?' (empty if none).
+typedef void (*WPRouteHandler)(WiFiClient& client, const String& path, const String& query);
 
 class WebPanel {
 public:
@@ -136,6 +141,15 @@ public:
   void setSliderStyle(int trackHeight, int thumbSize);  // slider dimensions in px (default: 6px track, 22px thumb)
   void begin(WiFiServer* server);
   void handleClient();
+
+  // Register a custom route. Any incoming request whose path starts with
+  // `prefix` is dispatched to `handler` before the form-page logic runs.
+  // The handler owns the response fully — write status line, headers, and
+  // body to the WiFiClient, then return. The socket is closed when the
+  // outer handler releases the client. Register more-specific prefixes first
+  // (e.g. "/info/" before "/info") so exact matches win over broader ones.
+  // Up to WP_MAX_ROUTES prefixes may be registered.
+  void addRoute(const char* prefix, WPRouteHandler handler);
 
   // Page management. Two-line variant: line1 (large) + line2 (small).
   // Single-arg variant sets line1 only and leaves line2 empty.
@@ -209,11 +223,15 @@ public:
   void addConditionalColorPicker(bool (*condition)(),
                                  const String& label, const String& field,
                                  int* preset, const char* tip = nullptr);
+  // maxLen: 0 = uncapped (legacy behavior). When > 0 the cap is enforced
+  // BOTH client-side (maxlength attribute) and server-side (the AJAX value
+  // is truncated before assignment) — browser maxlength alone is advisory.
   void addText(const String& label, const String& field, String* ptr,
                const String& placeholder = "",
-               const char* tip = nullptr);
+               const char* tip = nullptr, int maxLen = 0);
+  // Passwords default to 63 (the WPA2 passphrase maximum); pass 0 to uncap.
   void addPassword(const String& label, const String& field, String* ptr,
-                   const char* tip = nullptr);
+                   const char* tip = nullptr, int maxLen = 63);
   // Single-line text input with a submit button (rows defaults to 1).
   // Setting rows > 1 renders a multi-line <textarea> instead, full-width.
   // clearable=true (single-line only) inserts a small inline "x" button
@@ -312,6 +330,18 @@ private:
   static const int WP_MAX_GATE_PAIRS = 8;
   GatePair _gatePairs[WP_MAX_GATE_PAIRS];
   int      _gatePairCount = 0;
+
+  // Custom routes registered via addRoute(). Checked in handleClient()
+  // before the form-page dispatch runs.
+  struct Route {
+    const char*    prefix;
+    WPRouteHandler handler;
+  };
+  static const int WP_MAX_ROUTES = 8;
+  Route _routes[WP_MAX_ROUTES];
+  int   _routeCount = 0;
+  // Returns true if the request matched a registered route and was handled.
+  bool tryDispatchRoute(WiFiClient& client, const String& req);
 
   void ensureFields();  // auto-allocate fields array on first use
   static int countOptions(const String& csv);

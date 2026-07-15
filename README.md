@@ -342,11 +342,13 @@ Standard `<input type="number">` with min/max/step. Use this when you want keybo
 ```cpp
 void addText(const String& label, const String& field, String* ptr,
              const String& placeholder = "",
-             const String& tip = "");
+             const String& tip = "", int maxLen = 0);
 void addPassword(const String& label, const String& field, String* ptr,
-                 const String& tip = "");
+                 const String& tip = "", int maxLen = 63);
 ```
 Bound to a `String*`. Value is committed on blur or Enter. Password field includes a "Show" checkbox to toggle visibility. URL-decoded automatically.
+
+`maxLen` caps the value length both client-side (`maxlength` attribute) and server-side (the incoming AJAX value is truncated before assignment, so a hand-crafted request can't bypass the cap). `addText` defaults to 0 = uncapped (legacy behavior); `addPassword` defaults to 63, the WPA2 passphrase maximum. Cap any field that feeds a length-sensitive consumer — e.g. an AP-name/SSID field should use 31 (`WiFi.softAP()` silently fails past 32 chars, which can strand a device whose recovery path is its own AP).
 
 #### Text input with send button
 

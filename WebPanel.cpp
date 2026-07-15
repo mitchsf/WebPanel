@@ -59,6 +59,40 @@ void WebPanel::setBufferSize(int bytes) { _wantBufSize = bytes; }
 void WebPanel::setCaptivePortal(bool on) { _captivePortal = on; }
 void WebPanel::setRebootOnSave(bool reboot, const String& saveLabel) { _rebootOnSave = reboot; _saveLabel = saveLabel; }
 
+void WebPanel::addRoute(const char* prefix, WPRouteHandler handler) {
+  if (!prefix || !handler) return;
+  if (_routeCount >= WP_MAX_ROUTES) return;
+  _routes[_routeCount].prefix  = prefix;
+  _routes[_routeCount].handler = handler;
+  _routeCount++;
+}
+
+// Parse the request line ("GET /path[?query] HTTP/1.x") and dispatch to the
+// first registered route whose prefix matches the path. Returns true if a
+// route handled the request. Handlers own the response entirely.
+bool WebPanel::tryDispatchRoute(WiFiClient& client, const String& req) {
+  if (_routeCount == 0) return false;
+  if (!req.startsWith("GET ")) return false;
+  int pathStart = 4;
+  int pathEnd   = req.indexOf(' ', pathStart);
+  if (pathEnd < 0) pathEnd = req.length();
+  int queryPos  = req.indexOf('?', pathStart);
+  bool hasQuery = (queryPos >= 0 && queryPos < pathEnd);
+  int pathOnlyEnd = hasQuery ? queryPos : pathEnd;
+  String path  = req.substring(pathStart, pathOnlyEnd);
+  String query = hasQuery ? req.substring(queryPos + 1, pathEnd) : String();
+  for (int i = 0; i < _routeCount; i++) {
+    const char* p = _routes[i].prefix;
+    if (!p) continue;
+    int plen = (int)strlen(p);
+    if ((int)path.length() >= plen && strncmp(path.c_str(), p, plen) == 0) {
+      _routes[i].handler(client, path, query);
+      return true;
+    }
+  }
+  return false;
+}
+
 void WebPanel::gateFieldBy(const char* gatedField,
                             const char* controllerField,
                             int32_t enableValue) {
@@ -437,7 +471,7 @@ void WebPanel::addConditionalColorPicker(bool (*condition)(),
 
 void WebPanel::addText(const String& label, const String& field,
                                String* ptr, const String& placeholder,
-                               const char* tip) {
+                               const char* tip, int maxLen) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -447,6 +481,7 @@ void WebPanel::addText(const String& label, const String& field,
   f.strPtr = ptr;
   f.presetPtr = nullptr;
   f.extraText = placeholder;
+  f.maxVal = constrain(maxLen, 0, 32767);   // 0 = uncapped
   f.tip = tip;
   f.condition = nullptr;
   f.page = _currentPage;
@@ -454,7 +489,7 @@ void WebPanel::addText(const String& label, const String& field,
 }
 
 void WebPanel::addPassword(const String& label, const String& field, String* ptr,
-                            const char* tip) {
+                            const char* tip, int maxLen) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -463,6 +498,7 @@ void WebPanel::addPassword(const String& label, const String& field, String* ptr
   f.fieldName = field;
   f.strPtr = ptr;
   f.presetPtr = nullptr;
+  f.maxVal = constrain(maxLen, 0, 32767);   // 0 = uncapped
   f.tip = tip;
   f.condition = nullptr;
   f.page = _currentPage;
@@ -720,6 +756,14 @@ void WebPanel::handleClient() {
       continue;
     }
 
+    // Custom routes registered via addRoute() get first crack after /health,
+    // before the non-form reject and captive-portal redirect below. Handler
+    // owns the full response; on match, count as an OK and move on.
+    if (tryDispatchRoute(client, req)) {
+      _reqOK++;
+      continue;
+    }
+
     // Reject favicon and other non-form requests quickly. Don't count
     // favicon rejects in _reqRejected — iOS Safari requests /favicon.ico
     // on every page load and would otherwise inflate the counter with
@@ -909,6 +953,13 @@ void WebPanel::handleAjax(WiFiClient& client, const String& req) {
     // Text-based fields: update String pointer
     if (f.type == WP_TEXT || f.type == WP_PASSWORD || f.type == WP_TEXT_INPUT) {
       String decoded = urlDecode(value);
+      // Enforce the field's maxLen server-side for addText/addPassword —
+      // the rendered maxlength attribute is advisory only. WP_TEXT_INPUT
+      // is exempt: its maxVal predates this cap and textareas carry long
+      // content by design.
+      if (f.type != WP_TEXT_INPUT && f.maxVal > 0 &&
+          decoded.length() > (unsigned int)f.maxVal)
+        decoded = decoded.substring(0, f.maxVal);
       if (f.strPtr) *f.strPtr = decoded;
       if (_textCb) _textCb(field, decoded);
       sendOK(client);
@@ -1064,6 +1115,11 @@ void WebPanel::genText(int idx) {
   out("\" value=\"");
   out(val);
   out("\"");
+  if (f.maxVal > 0) {
+    out(" maxlength=\"");
+    out(f.maxVal);
+    out("\"");
+  }
   if (f.extraText.length() > 0) {
     out(" placeholder=\"");
     out(f.extraText);
@@ -1196,7 +1252,13 @@ void WebPanel::genPassword(int idx) {
   out(f.fieldName);
   out("\" value=\"");
   out(val);
-  out("\" autocomplete=\"off\" autocorrect=\"off\" autocapitalize=\"none\" spellcheck=\"false\"");
+  out("\"");
+  if (f.maxVal > 0) {
+    out(" maxlength=\"");
+    out(f.maxVal);
+    out("\"");
+  }
+  out(" autocomplete=\"off\" autocorrect=\"off\" autocapitalize=\"none\" spellcheck=\"false\"");
   out(" onblur=\"sendStr('");
   out(f.fieldName);
   out("',this.value)\" onkeydown=\"if(event.key==='Enter'){sendStr('");
