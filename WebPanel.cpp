@@ -269,7 +269,7 @@ void WebPanel::setHomePage() {
 
 void WebPanel::addActionButton(const String& label, const String& fieldName,
                                 const String& confirmMessage, bool reloadAfter,
-                                const String& statusField) {
+                                const String& statusField, bool stayOnPage) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -278,6 +278,7 @@ void WebPanel::addActionButton(const String& label, const String& fieldName,
   f.fieldName = fieldName;
   f.extraText = confirmMessage;   // reused: confirm message text
   f.reloadAfter = reloadAfter;    // confirm-and-clear: poll+reload instead of fade-to-blank
+  f.stayOnPage = stayOnPage;      // return to current sub-page (vs home) after the result
   f.optionsCSV = statusField;     // reused (action button): poll field whose response is the result
   f.presetPtr = nullptr;
   f.strPtr = nullptr;
@@ -534,6 +535,22 @@ void WebPanel::addCheckbox(const String& label, const String& field, int* preset
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_CHECKBOX;
+  f.label = label;
+  f.fieldName = field;
+  f.presetPtr = preset;
+  f.strPtr = nullptr;
+  f.tip = tip;
+  f.condition = nullptr;
+  f.page = _currentPage;
+  if (_currentPage == -1) _mainHasFields = true;
+}
+
+void WebPanel::addToggle(const String& label, const String& field, int* preset,
+                          const char* tip) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_TOGGLE;
   f.label = label;
   f.fieldName = field;
   f.presetPtr = preset;
@@ -973,7 +990,7 @@ void WebPanel::handleAjax(WiFiClient& client, const String& req) {
       // Value comes as HHMM integer from JS
       if (f.presetPtr) *f.presetPtr = v;
     }
-    else if (f.type == WP_CHECKBOX) {
+    else if (f.type == WP_CHECKBOX || f.type == WP_TOGGLE) {
       if (f.presetPtr) *f.presetPtr = (v != 0) ? 1 : 0;
     }
     else if (f.type == WP_RANGE || f.type == WP_NUMBER) {
@@ -1294,6 +1311,31 @@ void WebPanel::genCheckbox(int idx) {
   out("</div>");
 }
 
+// Sliding pill toggle switch — same 0/1 value + AJAX as genCheckbox, but the
+// checkbox input is visually hidden and styled as a track+knob via .sw-*.
+void WebPanel::genToggle(int idx) {
+  WPField& f = _fields[idx];
+  int val = f.presetPtr ? *f.presetPtr : 0;
+
+  out("<div class=\"fg sw-group\"><label class=\"sw-label\">");
+  out("<span class=\"sw-text\">");
+  out(f.label);
+  out("</span>");
+  // Tip icon sits with the label text (before the switch), matching genCheckbox.
+  emitTipIcon(idx);
+  out("<input type=\"checkbox\" class=\"sw-input\" id=\"");
+  out(f.fieldName);
+  out("\"");
+  if (val) out(" checked");
+  out(" onchange=\"send('");
+  out(f.fieldName);
+  out("',this.checked?1:0)\">");
+  out("<span class=\"sw-track\"><span class=\"sw-knob\"></span></span>");
+  out("</label>");
+  emitTipBox(idx);
+  out("</div>");
+}
+
 void WebPanel::genRadio(int idx) {
   WPField& f = _fields[idx];
   int sel = f.presetPtr ? *f.presetPtr : 0;
@@ -1436,6 +1478,7 @@ void WebPanel::genActionButton(int idx) {
     out(f.extraText);
     out("\"");
     if (f.reloadAfter) out(" data-reload=\"1\"");
+    if (f.reloadAfter && f.stayOnPage) out(" data-stay=\"1\"");
     if (f.reloadAfter && f.optionsCSV.length() > 0) {
       out(" data-statusfield=\"");
       out(f.optionsCSV);
@@ -1731,6 +1774,21 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out(".cb-label input[type=checkbox]{width:22px;height:22px;margin-right:12px;");
   out("cursor:pointer;accent-color:var(--pc);}");
 
+  // -- Toggle switch (sliding pill; same 0/1 as checkbox) --
+  out(".sw-group{margin-bottom:8px;}");
+  // Label text on the left, the pill pushed to the right edge of the row.
+  out(".sw-label{display:flex;align-items:center;cursor:pointer;width:100%;max-width:100%;");
+  out("font-size:1rem;font-weight:500;color:var(--tp);padding:6px 0;min-height:44px;}");
+  out(".sw-text{flex:1;}");
+  // Hide the native checkbox; the track+knob spans render the control.
+  out(".sw-input{position:absolute;opacity:0;width:0;height:0;margin:0;}");
+  out(".sw-track{position:relative;flex:0 0 auto;width:46px;height:26px;border-radius:13px;");
+  out("background:var(--bd,#bbb);transition:background .2s;margin-left:12px;}");
+  out(".sw-knob{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;");
+  out("background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4);transition:left .2s;}");
+  out(".sw-input:checked + .sw-track{background:var(--pc);}");
+  out(".sw-input:checked + .sw-track .sw-knob{left:23px;}");
+
   // -- Radio --
   out(".rd-group{margin-bottom:4px;}");
   out(".rd-label{display:flex;align-items:center;cursor:pointer;");
@@ -1824,6 +1882,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
       case WP_TEXT:             genText(i);           break;
       case WP_PASSWORD:         genPassword(i);       break;
       case WP_CHECKBOX:         genCheckbox(i);       break;
+      case WP_TOGGLE:           genToggle(i);         break;
       case WP_RADIO:            genRadio(i);          break;
       case WP_TIME:             genTime(i);           break;
       case WP_NUMBER:           genNumber(i);         break;
@@ -1934,13 +1993,16 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("function actionClear(f,btn){fetch('/?field='+f+'&value=1');");
   out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
   out("if(btn.dataset.reload){var sf=btn.dataset.statusfield;");
+  // dest: where to land after the result. data-stay → back to the current
+  // sub-page URL (captured now, before we navigate); otherwise the home page.
+  out("var dest=btn.dataset.stay?location.pathname:'/';");
   // Go HOME, but wait until the device is actually serving again before
   // navigating — a successful OTA reboots, so a blind redirect would land
   // mid-reboot, fail, and strand the user on the sub-page. Ping '/' until it
   // answers, then replace to home. No-reboot actions (already current) answer
   // immediately, so this is effectively instant for them.
   out("var home=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
-  out("fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace('/');}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};");
+  out("fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace(dest);}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};");
   out("var show=function(m){var e=document.querySelector('.saved-inner');if(e&&m)e.innerHTML=m;setTimeout(home,m?5000:0);};");
   out("var poll=function(){var c=new AbortController();");
   out("var t=setTimeout(function(){c.abort();},4000);");

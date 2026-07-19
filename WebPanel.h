@@ -55,6 +55,7 @@ enum WPFieldType : uint8_t {
   WP_TEXT,
   WP_PASSWORD,
   WP_CHECKBOX,
+  WP_TOGGLE,
   WP_RADIO,
   WP_TIME,
   WP_NUMBER,
@@ -74,6 +75,7 @@ struct WPField {
   bool     includeSeconds; // 1 byte — addTime only (HH:MM vs HH:MM:SS)
   bool     clearable;      // 1 byte — addTextInput only: render an inline "x" clear button
   bool     reloadAfter;    // 1 byte — addActionButton only: poll then reload after the overlay (vs fade to blank)
+  bool     stayOnPage;     // 1 byte — addActionButton only: after the result, return to the current sub-page instead of home
   const char* thumbColor;  // 4 bytes — "r","g","b" for channel tint, or CSS color string, or nullptr
   int16_t  minVal;         // 2 bytes
   int16_t  maxVal;         // 2 bytes
@@ -183,10 +185,14 @@ public:
   // home. A response of "" or "OK" means "no result" → navigate immediately.
   // The blocking action won't answer the poll until it finishes, so the first
   // non-error response is the genuine outcome (or a post-reboot empty result).
+  // stayOnPage (only with reloadAfter + statusField): after showing the result
+  // overlay, return to the CURRENT sub-page instead of the home page. Use for a
+  // non-rebooting action whose form lives on a sub-page (e.g. a Send Test).
   void addActionButton(const String& label, const String& fieldName,
                        const String& confirmMessage = "",
                        bool reloadAfter = false,
-                       const String& statusField = "");
+                       const String& statusField = "",
+                       bool stayOnPage = false);
 
   // Display a message overlay in the browser using the same style/animation
   // as the "Settings Saved" overlay. Call from inside any callback (change,
@@ -243,6 +249,10 @@ public:
                     int rows = 1, bool clearable = false);
   void addCheckbox(const String& label, const String& field, int* preset,
                    const char* tip = nullptr);
+  // Same 0/1 semantics as addCheckbox, but renders as a sliding pill toggle
+  // switch instead of a square checkbox. Bound to an int* (0 = off, 1 = on).
+  void addToggle(const String& label, const String& field, int* preset,
+                 const char* tip = nullptr);
   void addRadio(const String& label, const String& field,
                 const String& options, int* preset,
                 const char* tip = nullptr);
@@ -384,6 +394,7 @@ private:
   void genText(int idx);
   void genPassword(int idx);
   void genCheckbox(int idx);
+  void genToggle(int idx);
   void genRadio(int idx);
   void genTime(int idx);
   void genNumber(int idx);
