@@ -1969,6 +1969,14 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("o.innerHTML='<div class=\"saved-inner\">'+t+'</div>';");
   out("document.body.appendChild(o);");
   out("setTimeout(function(){o.style.opacity='0';setTimeout(function(){o.remove();},500);},3000);}");
+  // Reboot overlay: a Save callback that returns a "::RB::<msg>" body means the
+  // device is rebooting. Replace the page with the message, wait for it to come
+  // back (ping '/' until it answers), then go to the HOME page — same pattern as
+  // the action-button reload, but triggered from the Save path.
+  out("function wpReboot(msg){document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+(msg||'Rebooting\\u2026')+'</div></div>';");
+  out("var home=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
+  out("fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace('/');}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};");
+  out("setTimeout(home,3000);}");
   // Helper: process AJAX response — show overlay if body is not "OK"
   out("function chk(r){return r.text().then(function(m){"
         "if(m&&m.indexOf('::RL::')===0){var msg=m.substr(6);if(msg)showMsg(msg);"
@@ -2064,8 +2072,10 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("function save(){fetch('/?save=1');");
     out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">\\u2713 Settings Saved</div></div>';}");
   } else {
-    // Save: if response is "OK", show "Settings Saved"; else show the custom message
+    // Save: "::RB::<msg>" → reboot overlay + go home; "OK"/"" → "Settings Saved";
+    // any other text → show it as the toast (e.g. a rejection notice).
     out("function save(){fetch('/?save=1').then(function(r){return r.text();}).then(function(m){");
+    out("if(m&&m.indexOf('::RB::')===0){wpReboot(m.substr(6));return;}");
     out("var t=(m&&m!=='OK')?m:'\\u2713 Settings Saved';showMsg(t);});}");
   }
   // After a chk()-triggered reload (rule add/edit/delete) restore the scroll
