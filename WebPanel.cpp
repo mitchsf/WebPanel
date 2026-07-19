@@ -1973,10 +1973,18 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // device is rebooting. Replace the page with the message, wait for it to come
   // back (ping '/' until it answers), then go to the HOME page — same pattern as
   // the action-button reload, but triggered from the Save path.
-  out("function wpReboot(msg){document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+(msg||'Rebooting\\u2026')+'</div></div>';");
-  out("var home=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
-  out("fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace('/');}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};");
-  out("setTimeout(home,3000);}");
+  // Body may be "<url>|<msg>" — if it starts with http, the leading part up to
+  // the first '|' is the address the device will come back at (e.g. a newly-set
+  // static IP), which is probed cross-origin (no-cors) and then navigated to.
+  // Otherwise the target is the home page '/' at the current host.
+  out("function wpReboot(m){var url='/',msg=m;");
+  out("if(m&&m.indexOf('http')===0){var i=m.indexOf('|');if(i>0){url=m.substring(0,i);msg=m.substring(i+1);}}");
+  out("var xo=(url!=='/');");
+  out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+(msg||'Rebooting\\u2026')+'</div></div>';");
+  out("var go=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
+  out("var b=xo?url:'/';var u=b+(b.indexOf('?')<0?'?':'&')+'cb='+Date.now();");
+  out("fetch(u,{cache:'no-store',mode:xo?'no-cors':'cors',signal:c.signal}).then(function(){clearTimeout(t);location.replace(url);}).catch(function(){clearTimeout(t);setTimeout(go,1500);});};");
+  out("setTimeout(go,3000);}");
   // Helper: process AJAX response — show overlay if body is not "OK"
   out("function chk(r){return r.text().then(function(m){"
         "if(m&&m.indexOf('::RL::')===0){var msg=m.substr(6);if(msg)showMsg(msg);"
