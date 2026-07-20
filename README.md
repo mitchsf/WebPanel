@@ -79,7 +79,7 @@ It is **not** a general-purpose web framework. It serves exactly one form (which
 - **Zero dependencies.** Only `WiFi.h`/`WiFiServer.h`/`WiFiClient.h` from the ESP32 core. No `WebServer`, `ESPAsyncWebServer`, AsyncTCP, ArduinoJson, or filesystem libraries needed.
 - **Bound directly to your variables.** Pass `int*` (or `String*`) pointers — when the user changes a slider, your variable updates immediately. No JSON parsing, no manual extraction.
 - **Live AJAX updates.** Every field change is sent to the device the moment the user releases it. No "submit" required for runtime tuning. A separate "Save Settings" button calls your save callback to persist values.
-- **Multi-page forms.** A home page with navigation buttons, plus up to 10 sub-pages. Each sub-page has a Back button and its own Save button. Helps split long forms into logical sections (Network, Display, Lighting, etc.) and keeps each rendered page small.
+- **Multi-page forms.** A home page with navigation buttons, plus up to 10 sub-pages. Each sub-page has its own Save button, with a Back button below it at the bottom of the form. Helps split long forms into logical sections (Network, Display, Lighting, etc.) and keeps each rendered page small.
 - **Polished mobile UI.** Modern CSS (gradients, shadows, transitions, focus rings), 48 px touch targets, responsive layout, supports both light DPI phones and desktop browsers. iOS Safari time-input fix included.
 - **Tooltips.** Pass an optional `tip` string to any field; an info icon (ⓘ) appears next to the label and a floating dark bubble pops up on tap.
 - **Action buttons.** Trigger arbitrary one-shot operations (reboot, OTA, factory reset) with optional full-screen confirmation overlays.

@@ -1807,7 +1807,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out(".back-btn{display:block;width:100%;padding:12px;font-size:1.05rem;font-weight:600;");
   out("color:var(--ts);background:var(--bg);border:1.5px solid var(--br);");
   out("border-radius:var(--r);cursor:pointer;text-align:center;text-decoration:none;");
-  out("transition:border-color .15s,color .15s;margin-bottom:10px;}");
+  out("transition:border-color .15s,color .15s;margin-top:12px;}");
   out(".back-btn:active{border-color:var(--ts);color:var(--tp);}");
 
   // -- Text input with send button --
@@ -1907,10 +1907,10 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     }
   } else {
     out("<div class=\"sep\"></div>");
-    out("<a href=\"/\" class=\"back-btn\">Back</a>");
     out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
     out(saveTxt);
     out("</button>");
+    out("<a href=\"/\" class=\"back-btn\">Back</a>");
   }
 
   out("</div></div>");
