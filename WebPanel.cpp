@@ -1614,7 +1614,15 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // sideways — they lock at their natural boundaries like the short pages. (iOS
   // Safari support for this on the root scroller is version-dependent; harmless
   // where unsupported.)
-  out("body{overscroll-behavior:none;}");
+  // touch-action blocks the horizontal-pan GESTURE at the touch layer. The
+  // overflow/overscroll rules above are ignored by captive-portal mini-
+  // browsers (iOS CNA / Android sign-in WebView — where the AP setup form
+  // renders), which let any page rubber-band sideways; touch-action IS
+  // honored there (WKWebView since iOS 13). pan-y keeps vertical scroll,
+  // pinch-zoom keeps zoom; no element in WebPanel or the rule table scrolls
+  // horizontally, and range sliders benefit (horizontal drags can't be
+  // claimed as page panning).
+  out("body{overscroll-behavior:none;touch-action:pan-y pinch-zoom;}");
   // Bump the root font-size so all rem-based text scales up ~6%. Container
   // max-width stays in px so the form's width is unchanged; only text grows.
   out("html{font-size:17px;}");
