@@ -141,6 +141,22 @@ public:
                                    // so OS connectivity probes trigger the "Sign in to network" popup.
                                    // Default off — STA/runtime forms are unaffected.
   void setSliderStyle(int trackHeight, int thumbSize);  // slider dimensions in px (default: 6px track, 22px thumb)
+  // Override the PWA / home-screen icon served at /icon.png (192x192 PNG,
+  // PROGMEM or any static buffer that outlives the panel). The library ships
+  // a built-in nixie-tube default; pass nullptr to restore it.
+  void setAppIcon(const uint8_t* png, size_t len);
+  // Enable the PWA surface: /icon.png + /manifest.json routes and the
+  // icon/manifest head tags, making the form installable as a phone
+  // home-screen app. Default OFF — with it off the library behaves
+  // byte-identically to the pre-PWA versions (nothing new served, no head
+  // tags, browsers never learn the 28 KB icon exists). Opt in per panel:
+  //   panel.setPWA(true);
+  void setPWA(bool enabled);
+  // Name shown under the home-screen icon (manifest name/short_name +
+  // apple-mobile-web-app-title). Defaults to setTitle() line 1 — set this
+  // when the page title carries a suffix (e.g. "Zev-7S Live") that shouldn't
+  // appear on the icon.
+  void setAppName(const String& name);
   void begin(WiFiServer* server);
   void handleClient();
 
@@ -160,6 +176,15 @@ public:
   // with version + IP) so the home-page button still shows readable text.
   // buttonColor: optional CSS color (e.g. "var(--sc)" or "#10b981") for the
   // page-nav button on the home page. nullptr → default blue (.page-btn).
+  // Per-page navigation tweaks — pageIdx is 0-based in addPage() order.
+  // setPageBackTarget: the sub-page's Back button links to `href` (e.g.
+  // "/page4") instead of the home page. The string must outlive the panel
+  // (string literal recommended). hidePageNavButton: suppress this page's
+  // auto-generated nav button on the home page — reach the page another
+  // way (e.g. an addHTML link styled with class="page-btn").
+  void setPageBackTarget(int pageIdx, const char* href);
+  void hidePageNavButton(int pageIdx);
+
   void addPage(const String& line1, const String& line2 = "",
                const String& buttonLabel = "",
                const char* buttonColor = nullptr);
@@ -320,6 +345,8 @@ private:
   // Page state
   String _pageLine1[WP_MAX_PAGES];   // sub-page large header
   String _pageLine2[WP_MAX_PAGES];   // sub-page small header (under line1)
+  const char* _pageBackHref[WP_MAX_PAGES] = {nullptr};  // Back-button target override (nullptr = "/")
+  bool _pageNavHidden[WP_MAX_PAGES] = {false};          // true = no auto nav button on the home page
   int    _numPages;
   int    _currentPage;     // page being built: -1 = main
   bool   _mainHasFields;
@@ -361,6 +388,12 @@ private:
   void handleAjax(WiFiClient& client, const String& req);
   void handleSave(WiFiClient& client);
   void handleHealth(WiFiClient& client);
+  void handleIcon(WiFiClient& client);      // GET /icon.png — app icon (setAppIcon override or built-in default)
+  void handleManifest(WiFiClient& client);  // GET /manifest.json — PWA manifest built from the panel title
+  const uint8_t* _appIconPng = nullptr;     // nullptr → serve the library default icon
+  size_t         _appIconLen = 0;
+  bool           _pwaEnabled = false;       // setPWA(true) adds routes + head tags (opt-in)
+  String         _appName;                  // icon label; empty → _titleLine1
   void sendOK(WiFiClient& client);
 
   // Request counters surfaced by /health.

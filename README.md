@@ -47,6 +47,7 @@ That's the entire app. Connect to the device's WiFi, open `http://192.168.4.1`, 
 - [Memory model](#memory-model)
 - [API reference](#api-reference)
   - [Setup](#setup)
+  - [PWA / home-screen icon](#pwa--home-screen-icon)
   - [Authentication](#authentication)
   - [Field types](#field-types)
   - [Pages and navigation](#pages-and-navigation)
@@ -238,6 +239,31 @@ void handleClient();   // call from loop()
 void setSliderStyle(int trackHeight, int thumbSize);
 ```
 Set the slider track height and thumb diameter in pixels. Defaults are 6 px track and 22 px thumb. Call before `begin()`. Use this to match a specific visual style — for example, `panel.setSliderStyle(30, 30)` creates chunky pill-shaped sliders similar to the Velleman BrightDot Clock.
+
+### PWA / home-screen icon
+
+A panel can be made installable as a phone home-screen "app". **Opt-in per panel** with `setPWA(true)`: the library then serves `GET /icon.png` (a built-in 192×192 nixie-tube PNG stored in flash — `WebPanelIcon.h`) and `GET /manifest.json` (name/short_name from `setAppName()`, falling back to `setTitle()` line 1; `display: standalone`, black theme), and emits the matching `<link rel="manifest">`, `<link rel="icon">`, `<link rel="apple-touch-icon">`, `apple-mobile-web-app-capable`, and `apple-mobile-web-app-title` tags in every page head. Typically enabled on the runtime/live form only — a setup form served in AP mode is a poor install target.
+
+```cpp
+void setAppName(const String& name);
+```
+Name shown under the home-screen icon (Android via the manifest, iOS via `apple-mobile-web-app-title`). Defaults to `setTitle()` line 1 — set this when the page title carries a suffix (e.g. `"Zev-7S Live"`) that shouldn't appear on the icon. The icon also acts as the favicon. Add to Home Screen on iOS/Android then opens the form full-screen under the panel's title with the icon.
+
+```cpp
+void setAppIcon(const uint8_t* png, size_t len);
+```
+Replace the built-in icon with an application-supplied one. `png` must be a 192×192 PNG in `PROGMEM` (or any static buffer that outlives the panel); it is served verbatim from flash — **zero RAM cost** either way. Pass `nullptr` to restore the library default. The icon is served with `Cache-Control: max-age=31536000, immutable` — browsers download it roughly once per device, ever. Consequence: if a later firmware ships a *different* icon, browsers that cached the old one keep showing it until their cache evicts it (and home-screen shortcuts keep the icon captured at install time regardless — users must re-add the shortcut to see a new icon). The manifest uses `max-age=86400` so a changed `setTitle()` propagates within a day.
+
+```cpp
+#include "myicon.h"   // const uint8_t myicon_png[] PROGMEM = {...};
+panel.setAppIcon(myicon_png, myicon_png_len);
+```
+To generate the header from a PNG: `xxd -i icon.png > myicon.h`, then add `const`/`PROGMEM` to the array declaration.
+
+```cpp
+void setPWA(bool enabled);
+```
+Enable the PWA surface for this panel. **Default disabled** — an app that never calls this behaves byte-identically to the pre-PWA library (no routes, no head tags, browsers never learn the icon exists), so RAM-tight legacy apps are unaffected without any change. When enabled, RAM cost is still near zero: the icon is served straight from flash (+8 bytes static, ~280 bytes more head HTML in the existing render buffer); browsers pull the 28 KB icon roughly once per device due to the immutable cache header.
 
 ### Authentication
 

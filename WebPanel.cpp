@@ -3,6 +3,7 @@
   ----------------------------------------------------------------------*/
 
 #include "WebPanel.h"
+#include "WebPanelIcon.h"
 #include "mbedtls/base64.h"
 #include <sys/socket.h>
 
@@ -58,6 +59,15 @@ void WebPanel::setAuth(String* password) { _authPass = password; }
 void WebPanel::setBufferSize(int bytes) { _wantBufSize = bytes; }
 void WebPanel::setCaptivePortal(bool on) { _captivePortal = on; }
 void WebPanel::setRebootOnSave(bool reboot, const String& saveLabel) { _rebootOnSave = reboot; _saveLabel = saveLabel; }
+
+void WebPanel::setAppIcon(const uint8_t* png, size_t len) {
+  _appIconPng = png;
+  _appIconLen = png ? len : 0;
+}
+
+void WebPanel::setPWA(bool enabled) { _pwaEnabled = enabled; }
+
+void WebPanel::setAppName(const String& name) { _appName = name; }
 
 void WebPanel::addRoute(const char* prefix, WPRouteHandler handler) {
   if (!prefix || !handler) return;
@@ -132,16 +142,22 @@ void WebPanel::begin(WiFiServer* server) {
 // without PSRAM (PICO-D4, PICO-V3).
 void WebPanel::allocBuffer() {
   if (_htmlBuf != nullptr) return;
+  int size = _wantBufSize;
 #if defined(BOARD_HAS_PSRAM) || defined(CONFIG_SPIRAM) || defined(CONFIG_SPIRAM_SUPPORT)
   if (psramFound()) {
-    _htmlBuf = (char*)ps_malloc(_wantBufSize);
+    // PSRAM is plentiful — when the app hasn't overridden the size via
+    // setBufferSize(), grow the default 40 KB to 64 KB so long pages
+    // (64-rule schedule tables, healing grids) can't outrun the buffer.
+    if (size == WP_HTML_BUFFER_SIZE) size = 65536;
+    _htmlBuf = (char*)ps_malloc(size);
   }
 #endif
   if (_htmlBuf == nullptr) {
-    _htmlBuf = (char*)malloc(_wantBufSize);
+    size = _wantBufSize;   // DRAM fallback keeps the conservative size
+    _htmlBuf = (char*)malloc(size);
   }
   if (_htmlBuf) {
-    _htmlBufSize = _wantBufSize;
+    _htmlBufSize = size;
     _htmlBuf[0] = 0;
   }
   // Pre-size input buffers right after the render buffer, while the heap is
@@ -264,6 +280,14 @@ void WebPanel::addPage(const String& line1, const String& line2, const String& b
 
 void WebPanel::setHomePage() {
   _currentPage = -1;
+}
+
+void WebPanel::setPageBackTarget(int pageIdx, const char* href) {
+  if (pageIdx >= 0 && pageIdx < WP_MAX_PAGES) _pageBackHref[pageIdx] = href;
+}
+
+void WebPanel::hidePageNavButton(int pageIdx) {
+  if (pageIdx >= 0 && pageIdx < WP_MAX_PAGES) _pageNavHidden[pageIdx] = true;
 }
 
 
@@ -781,6 +805,18 @@ void WebPanel::handleClient() {
       continue;
     }
 
+    // PWA icon + manifest (before the non-form reject / captive redirect).
+    // With setPWA(false) these fall through to the reject path like any
+    // other non-form request.
+    if (_pwaEnabled && req.indexOf("GET /icon.png") == 0) {
+      handleIcon(client);
+      continue;
+    }
+    if (_pwaEnabled && req.indexOf("GET /manifest.json") == 0) {
+      handleManifest(client);
+      continue;
+    }
+
     // Reject favicon and other non-form requests quickly. Don't count
     // favicon rejects in _reqRejected — iOS Safari requests /favicon.ico
     // on every page load and would otherwise inflate the counter with
@@ -873,6 +909,55 @@ void WebPanel::handleHealth(WiFiClient& client) {
   int hn = snprintf(hdr, sizeof(hdr),
     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n"
     "Cache-Control: no-store\r\nConnection: close\r\n\r\n", n);
+  if (hn < 0) hn = 0;
+  if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
+  client.write((const uint8_t*)hdr, hn);
+  client.write((const uint8_t*)body, n);
+  client.flush();
+  client.stop();
+  _reqOK++;
+}
+
+// GET /icon.png — the PWA / home-screen icon. Application override via
+// setAppIcon() wins; otherwise the library's built-in nixie-tube default.
+// Effectively-permanent client cache: the icon changes only when a firmware
+// ships a different one, so browsers fetch it roughly once per device.
+void WebPanel::handleIcon(WiFiClient& client) {
+  const uint8_t* png = _appIconPng ? _appIconPng : WP_DEFAULT_ICON_PNG;
+  size_t len         = _appIconPng ? _appIconLen : WP_DEFAULT_ICON_PNG_LEN;
+  char hdr[176];
+  int hn = snprintf(hdr, sizeof(hdr),
+    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: %u\r\n"
+    "Cache-Control: max-age=31536000, immutable\r\nConnection: close\r\n\r\n", (unsigned)len);
+  if (hn < 0) hn = 0;
+  if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
+  client.write((const uint8_t*)hdr, hn);
+  writeAll(client, png, (int)len);   // flash is memory-mapped; chunked send
+  client.flush();
+  client.stop();
+  _reqOK++;
+}
+
+// GET /manifest.json — minimal PWA manifest so "Add to Home Screen" installs
+// the form full-screen under the panel's title with the /icon.png icon.
+void WebPanel::handleManifest(WiFiClient& client) {
+  // Name goes into JSON string literals — strip characters that would
+  // break the quoting (names are app-supplied plain text in practice).
+  String name = _appName.length() ? _appName : _titleLine1;
+  name.replace("\\", ""); name.replace("\"", "");
+  char body[320];
+  int n = snprintf(body, sizeof(body),
+    "{\"name\":\"%s\",\"short_name\":\"%s\",\"start_url\":\"/\","
+    "\"display\":\"standalone\",\"background_color\":\"#000000\","
+    "\"theme_color\":\"#000000\","
+    "\"icons\":[{\"src\":\"/icon.png\",\"sizes\":\"192x192\",\"type\":\"image/png\"}]}",
+    name.c_str(), name.c_str());
+  if (n < 0) n = 0;
+  if (n >= (int)sizeof(body)) n = sizeof(body) - 1;
+  char hdr[160];
+  int hn = snprintf(hdr, sizeof(hdr),
+    "HTTP/1.1 200 OK\r\nContent-Type: application/manifest+json\r\n"
+    "Content-Length: %d\r\nCache-Control: max-age=86400\r\nConnection: close\r\n\r\n", n);
   if (hn < 0) hn = 0;
   if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
   client.write((const uint8_t*)hdr, hn);
@@ -1453,6 +1538,7 @@ void WebPanel::genHidden(int idx) {
 
 void WebPanel::genPageButton(int idx) {
   WPField& f = _fields[idx];
+  if (f.offset >= 0 && f.offset < WP_MAX_PAGES && _pageNavHidden[f.offset]) return;
   out("<a href=\"/page");
   out(f.offset);  // page index
   out("\" class=\"page-btn\"");
@@ -1570,6 +1656,22 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("<!DOCTYPE html><html lang=\"en\"><head>");
   out("<meta charset=\"UTF-8\">");
   out("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">");
+  // PWA / home-screen install: manifest for Android/Chrome; the apple-* pair
+  // because iOS Safari ignores the manifest for icon and full-screen mode.
+  // rel=icon also serves as the favicon, quieting /favicon.ico requests.
+  if (_pwaEnabled) {
+    out("<link rel=\"manifest\" href=\"/manifest.json\">");
+    out("<link rel=\"icon\" type=\"image/png\" href=\"/icon.png\">");
+    out("<link rel=\"apple-touch-icon\" href=\"/icon.png\">");
+    out("<meta name=\"apple-mobile-web-app-capable\" content=\"yes\">");
+    // iOS takes the icon label from this meta (not the manifest); Android
+    // reads the manifest, which handleManifest() builds from the same name.
+    String iconName = _appName.length() ? _appName : _titleLine1;
+    iconName.replace("\"", "");
+    out("<meta name=\"apple-mobile-web-app-title\" content=\"");
+    out(iconName);
+    out("\">");
+  }
   out("<title>"); out(docTitle); out("</title>");
   out("<style>");
 
@@ -1918,7 +2020,13 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
     out(saveTxt);
     out("</button>");
-    out("<a href=\"/\" class=\"back-btn\">Back</a>");
+    {
+      const char* backHref = (page >= 0 && page < WP_MAX_PAGES && _pageBackHref[page])
+                               ? _pageBackHref[page] : "/";
+      out("<a href=\"");
+      out(backHref);
+      out("\" class=\"back-btn\">Back</a>");
+    }
   }
 
   out("</div></div>");
