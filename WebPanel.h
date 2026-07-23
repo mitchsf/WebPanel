@@ -184,6 +184,11 @@ public:
   // way (e.g. an addHTML link styled with class="page-btn").
   void setPageBackTarget(int pageIdx, const char* href);
   void hidePageNavButton(int pageIdx);
+  // hidePageSaveButton: suppress this sub-page's Save Settings button — for
+  // pages whose controls all persist immediately on change (e.g. a TubeHealer
+  // Healing page), where a Save button only invites confusion. The Back
+  // button still renders.
+  void hidePageSaveButton(int pageIdx);
 
   void addPage(const String& line1, const String& line2 = "",
                const String& buttonLabel = "",
@@ -347,6 +352,7 @@ private:
   String _pageLine2[WP_MAX_PAGES];   // sub-page small header (under line1)
   const char* _pageBackHref[WP_MAX_PAGES] = {nullptr};  // Back-button target override (nullptr = "/")
   bool _pageNavHidden[WP_MAX_PAGES] = {false};          // true = no auto nav button on the home page
+  bool _pageSaveHidden[WP_MAX_PAGES] = {false};         // true = no Save Settings button on this sub-page
   int    _numPages;
   int    _currentPage;     // page being built: -1 = main
   bool   _mainHasFields;

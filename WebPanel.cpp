@@ -290,6 +290,10 @@ void WebPanel::hidePageNavButton(int pageIdx) {
   if (pageIdx >= 0 && pageIdx < WP_MAX_PAGES) _pageNavHidden[pageIdx] = true;
 }
 
+void WebPanel::hidePageSaveButton(int pageIdx) {
+  if (pageIdx >= 0 && pageIdx < WP_MAX_PAGES) _pageSaveHidden[pageIdx] = true;
+}
+
 
 void WebPanel::addActionButton(const String& label, const String& fieldName,
                                 const String& confirmMessage, bool reloadAfter,
@@ -2017,9 +2021,11 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     }
   } else {
     out("<div class=\"sep\"></div>");
-    out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
-    out(saveTxt);
-    out("</button>");
+    if (!(page >= 0 && page < WP_MAX_PAGES && _pageSaveHidden[page])) {
+      out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
+      out(saveTxt);
+      out("</button>");
+    }
     {
       const char* backHref = (page >= 0 && page < WP_MAX_PAGES && _pageBackHref[page])
                                ? _pageBackHref[page] : "/";
