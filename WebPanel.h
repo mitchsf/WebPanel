@@ -240,9 +240,13 @@ public:
   void addDropDownOffset(const String& label, const String& field,
                          const String& options, int* preset, int offset,
                          const char* tip = nullptr);
+  // step (optional, default 1): slider moves in multiples of `step` from
+  // minVal (rendered as the native HTML range step attribute; the AJAX
+  // value is also snapped server-side so out-of-grid values can't land).
   void addRange(const String& label, const String& field,
                 int minVal, int maxVal, int* preset,
-                const char* tip = nullptr, const char* thumbColor = nullptr);
+                const char* tip = nullptr, const char* thumbColor = nullptr,
+                int step = 1);
   void addSubheading(const String& text);
   void addConditionalSubheading(bool (*condition)(), const String& text);
   void addColorPicker(const String& label, const String& field, int* preset,

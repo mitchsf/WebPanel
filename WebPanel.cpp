@@ -362,7 +362,8 @@ void WebPanel::addDropDownOffset(const String& label, const String& field,
 
 void WebPanel::addRange(const String& label, const String& field,
                                 int minVal, int maxVal, int* preset,
-                                const char* tip, const char* thumbColor) {
+                                const char* tip, const char* thumbColor,
+                                int step) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
@@ -371,7 +372,7 @@ void WebPanel::addRange(const String& label, const String& field,
   f.fieldName = field;
   f.minVal = minVal;
   f.maxVal = maxVal;
-  f.step = 1;
+  f.step = (step > 0) ? step : 1;
   f.presetPtr = preset;
   f.strPtr = nullptr;
   f.offset = 0;
@@ -1083,6 +1084,9 @@ void WebPanel::handleAjax(WiFiClient& client, const String& req) {
       if (f.presetPtr) *f.presetPtr = (v != 0) ? 1 : 0;
     }
     else if (f.type == WP_RANGE || f.type == WP_NUMBER) {
+      // Snap to the step grid first (browsers enforce step client-side, but
+      // a hand-crafted AJAX value could land off-grid), then clamp.
+      if (f.step > 1) v = f.minVal + ((v - f.minVal + f.step / 2) / f.step) * f.step;
       if (f.presetPtr) *f.presetPtr = constrain(v, f.minVal, f.maxVal);
     }
     else if (f.type == WP_DROPDOWN_OFFSET) {
@@ -1157,6 +1161,7 @@ void WebPanel::genRange(int idx) {
   out("<div class=\"rc\">");
   out("<input type=\"range\" min=\""); out(f.minVal);
   out("\" max=\""); out(f.maxVal);
+  if (f.step > 1) { out("\" step=\""); out(f.step); }
   out("\" value=\""); out(val);
   out("\" id=\""); out(f.fieldName);
   if (f.thumbColor) {

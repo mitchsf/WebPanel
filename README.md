@@ -336,9 +336,12 @@ Auto-generates a dropdown of integer values from `minVal` to `maxVal` inclusive.
 void addRange(const String& label, const String& field,
               int minVal, int maxVal, int* preset,
               const char* tip = nullptr,
-              const char* thumbColor = nullptr);
+              const char* thumbColor = nullptr,
+              int step = 1);
 ```
-Native HTML5 range slider with the current value displayed in a colored badge to the right. Step size is always 1. The badge updates live as the user drags; the AJAX call fires when the user releases.
+Native HTML5 range slider with the current value displayed in a colored badge to the right. The badge updates live as the user drags; the AJAX call fires when the user releases.
+
+The optional `step` parameter (default 1) makes the slider move in multiples of `step` from `minVal` — e.g. `addRange("Minimum Altitude", "alt", 0, 10000, &minAlt, nullptr, nullptr, 500)` steps 0, 500, 1000… It renders as the native HTML `step` attribute, and the incoming AJAX value is also snapped to the step grid server-side, so an off-grid value can never land in the bound variable.
 
 The optional `thumbColor` parameter tints the slider thumb and value badge. Three modes:
 
