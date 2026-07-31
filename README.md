@@ -210,6 +210,11 @@ static void WebPanel::freeBuffer();
 Free the shared HTML render buffer, reclaiming ~40 KB of heap. Use this before operations that need large contiguous memory (e.g. OTA updates that require ~40–50 KB for a TLS handshake). Call `allocBuffer()` afterwards to re-allocate the buffer if the device resumes normal operation without rebooting.
 
 ```cpp
+static void WebPanel::setPreferInternal(bool on);
+```
+Force the render buffer into internal DRAM even when PSRAM exists. **Call before `allocBuffer()`.** Default off (PSRAM preferred when present). For boards where PSRAM bus traffic contends with a display DMA — e.g. an ESP32-S3 driving a HUB75 matrix with OPI PSRAM fitted (WordClock-6): rendering and serving the form out of PSRAM glitches the panel. Pair with `setBufferSize()` sized for internal heap headroom.
+
+```cpp
 WebPanel::freeBuffer();    // reclaim 40 KB for TLS
 doOtaUpdate();             // needs large contiguous heap
 WebPanel::allocBuffer();   // re-allocate if no reboot

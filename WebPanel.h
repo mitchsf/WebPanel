@@ -137,6 +137,11 @@ public:
                                          // Shrinking it frees DRAM for the WiFi/TCP TX path on
                                          // no-PSRAM boards, where a too-large buffer can starve the
                                          // send side and stall large responses. Default WP_HTML_BUFFER_SIZE.
+  static void setPreferInternal(bool on);  // force the render buffer into internal DRAM even when
+                                           // PSRAM exists (call BEFORE allocBuffer()). For boards
+                                           // where PSRAM bus traffic contends with a display DMA
+                                           // (e.g. HUB75 on ESP32-S3 + OPI PSRAM): rendering/serving
+                                           // the form out of PSRAM glitches the panel. Default off.
   void setCaptivePortal(bool on);  // AP/setup mode: 302-redirect any non-form request to the form root
                                    // so OS connectivity probes trigger the "Sign in to network" popup.
                                    // Default off — STA/runtime forms are unaffected.
@@ -415,6 +420,7 @@ private:
   static char* _htmlBuf;
   static int   _htmlBufSize;
   static int   _wantBufSize;   // desired render-buffer size; set via setBufferSize() before allocBuffer()
+  static bool  _preferInternal;  // skip the PSRAM path in allocBuffer() — see setPreferInternal()
   int          _htmlPos;
 
   // Per-request input buffers — static so they're reserve()'d once and the

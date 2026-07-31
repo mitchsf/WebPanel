@@ -12,6 +12,7 @@
 char* WebPanel::_htmlBuf = nullptr;
 int   WebPanel::_htmlBufSize = 0;
 int   WebPanel::_wantBufSize = WP_HTML_BUFFER_SIZE;
+bool  WebPanel::_preferInternal = false;
 uint32_t WebPanel::_reqOK       = 0;
 uint32_t WebPanel::_reqRejected = 0;
 
@@ -57,6 +58,7 @@ void WebPanel::setOnChange(WPChangeCallback cb) { _changeCb = cb; }
 void WebPanel::setOnTextChange(WPTextCallback cb) { _textCb = cb; }
 void WebPanel::setAuth(String* password) { _authPass = password; }
 void WebPanel::setBufferSize(int bytes) { _wantBufSize = bytes; }
+void WebPanel::setPreferInternal(bool on) { _preferInternal = on; }
 void WebPanel::setCaptivePortal(bool on) { _captivePortal = on; }
 void WebPanel::setRebootOnSave(bool reboot, const String& saveLabel) { _rebootOnSave = reboot; _saveLabel = saveLabel; }
 
@@ -144,7 +146,7 @@ void WebPanel::allocBuffer() {
   if (_htmlBuf != nullptr) return;
   int size = _wantBufSize;
 #if defined(BOARD_HAS_PSRAM) || defined(CONFIG_SPIRAM) || defined(CONFIG_SPIRAM_SUPPORT)
-  if (psramFound()) {
+  if (!_preferInternal && psramFound()) {
     // PSRAM is plentiful — when the app hasn't overridden the size via
     // setBufferSize(), grow the default 40 KB to 64 KB so long pages
     // (64-rule schedule tables, healing grids) can't outrun the buffer.
