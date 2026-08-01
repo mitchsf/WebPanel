@@ -11,6 +11,8 @@
 // Shared across all instances.
 char* WebPanel::_htmlBuf = nullptr;
 int   WebPanel::_htmlBufSize = 0;
+int  WebPanel::_lastRenderLen   = 0;
+bool WebPanel::_lastRenderTrunc = false;
 int   WebPanel::_wantBufSize = WP_HTML_BUFFER_SIZE;
 bool  WebPanel::_preferInternal = false;
 uint32_t WebPanel::_reqOK       = 0;
@@ -2231,6 +2233,8 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
     _htmlPos);
   client.print(headers);
+  _lastRenderLen   = _htmlPos;
+  _lastRenderTrunc = (_htmlPos >= _htmlBufSize - 1);
   writeAll(client, (const uint8_t*)_htmlBuf, _htmlPos);
   client.flush();
   client.stop();

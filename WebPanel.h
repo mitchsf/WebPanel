@@ -134,6 +134,12 @@ public:
   void setRebootOnSave(bool reboot, const String& saveLabel = "");
   void setAuth(String* password);  // optional HTTP Basic Auth — enforced when *password is non-empty
   static void setBufferSize(int bytes);  // override render-buffer size (call BEFORE allocBuffer()).
+  // Render-size introspection. out() truncates SILENTLY at the buffer ceiling,
+  // which produces a half-written page the browser renders as blank or dead —
+  // a failure with no symptom at the API level. These let an application log
+  // what its largest page actually costs instead of guessing from field count.
+  static int  lastRenderLen()   { return _lastRenderLen; }
+  static bool lastRenderTruncated() { return _lastRenderTrunc; }
                                          // Shrinking it frees DRAM for the WiFi/TCP TX path on
                                          // no-PSRAM boards, where a too-large buffer can starve the
                                          // send side and stall large responses. Default WP_HTML_BUFFER_SIZE.
@@ -419,6 +425,8 @@ private:
   // all instances. A single early allocation doesn't fragment the heap.
   static char* _htmlBuf;
   static int   _htmlBufSize;
+  static int   _lastRenderLen;    // bytes produced by the most recent page render
+  static bool  _lastRenderTrunc;  // true when that render hit the buffer ceiling
   static int   _wantBufSize;   // desired render-buffer size; set via setBufferSize() before allocBuffer()
   static bool  _preferInternal;  // skip the PSRAM path in allocBuffer() — see setPreferInternal()
   int          _htmlPos;
