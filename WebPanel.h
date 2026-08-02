@@ -140,6 +140,13 @@ public:
   // what its largest page actually costs instead of guessing from field count.
   static int  lastRenderLen()   { return _lastRenderLen; }
   static bool lastRenderTruncated() { return _lastRenderTrunc; }
+
+  // Field-array occupancy. Every add*() silently returns once the array is
+  // full, so a form that outgrows setMaxFields() loses its LAST fields with no
+  // error anywhere — the page simply renders short. Applications should assert
+  // on these after building their forms rather than discover it on the bench.
+  int fieldCount() const { return _fieldCount; }
+  int maxFields()  const { return _maxFields; }
                                          // Shrinking it frees DRAM for the WiFi/TCP TX path on
                                          // no-PSRAM boards, where a too-large buffer can starve the
                                          // send side and stall large responses. Default WP_HTML_BUFFER_SIZE.
