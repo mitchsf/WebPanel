@@ -2267,6 +2267,19 @@ void WebPanel::writeAll(WiFiClient& client, const uint8_t* buf, int len) {
     if (w > 0) {
       sent += (int)w;
       lastProgress = millis();       // reset idle timer on any forward progress
+      /*  YIELD BETWEEN SEGMENTS, deliberately, even when the socket is happy.
+
+          Back-to-back writes are a sustained burst against the memory arbiter.
+          On a host that also runs a continuous DMA read — Info Panel's HUB75
+          panel streams ~4 MB/s from internal SRAM regardless of what the CPU is
+          doing — that burst starves the display and shows as artifacts on
+          screen whenever a page is served. Panel bandwidth is fixed by its
+          pixel clock, so it cannot give way; the sender has to.
+
+          One tick per ~1.4 KB spreads the same bytes over a slightly longer
+          span: about 18 ms added to a 26 KB page, which is not perceptible in a
+          settings form. Callers with no competing DMA lose nothing measurable.  */
+      delay(1);
     } else {
       delay(2);                      // window full — let it drain, then retry
     }
