@@ -297,13 +297,16 @@ public:
                    const char* tip = nullptr, int maxLen = 63);
   // Single-line text input with a submit button (rows defaults to 1).
   // Setting rows > 1 renders a multi-line <textarea> instead, full-width.
-  // clearable=true (single-line only) inserts a small inline "x" button
-  // between the input and the submit button — clicking it clears the
-  // input value and sends an empty string to the server.
+  // clearable (single-line only) inserts a small inline "x" at the input's
+  // right edge — clicking it clears the value and sends an empty string.
+  // DEFAULTS ON since 2026-08-06, matching addText, which now always draws
+  // one: clearing a field on a phone otherwise means long-press, select all,
+  // delete. Pass false to opt a field out. The x is invisible until the
+  // field has content, so this costs nothing on an empty form.
   void addTextInput(const String& label, const String& field, String* ptr,
                     const String& placeholder = "", int maxLen = 63,
                     const String& buttonLabel = "Send", const char* tip = nullptr,
-                    int rows = 1, bool clearable = false);
+                    int rows = 1, bool clearable = true);
   void addCheckbox(const String& label, const String& field, int* preset,
                    const char* tip = nullptr);
   // Same 0/1 semantics as addCheckbox, but renders as a sliding pill toggle

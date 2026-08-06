@@ -1225,7 +1225,17 @@ void WebPanel::genText(int idx) {
   emitTipIcon(idx);
   out("</label>");
   emitTipBox(idx);
-  out("<input type=\"text\" id=\"");
+  /*  INLINE CLEAR "x", the same control addTextInput has had. Added to
+      addText 2026-08-06: clearing one of these on a phone otherwise means
+      long-pressing to place a caret, select-all, delete — for a field like a
+      feed URL that is routinely swapped out, that is the most common edit
+      there is. Shown only when the field has content, so an empty form is
+      not a row of dead icons.
+
+      The wrapper is position:relative and the x is absolute inside it, which
+      is why the input has to be nested rather than styled directly.          */
+  out("<div class=\"ti-wrap\">");
+  out("<input type=\"text\" class=\"ti-x\" id=\"");
   out(f.fieldName);
   out("\" value=\"");
   out(val);
@@ -1240,11 +1250,30 @@ void WebPanel::genText(int idx) {
     out(f.extraText);
     out("\"");
   }
+  // Show/hide the x as the user types, so it appears on the first character
+  // and goes away again on backspace to empty.
+  out(" oninput=\"document.getElementById('");
+  out(f.fieldName);
+  out("_x').style.visibility=this.value?'visible':'hidden'\"");
   out(" onblur=\"sendStr('");
   out(f.fieldName);
   out("',this.value)\" onkeydown=\"if(event.key==='Enter'){sendStr('");
   out(f.fieldName);
   out("',this.value);this.blur();}\">");
+  /*  COMMITS THE EMPTY VALUE IMMEDIATELY rather than waiting for blur. The x
+      is a deliberate act on a control the user is looking at, and leaving the
+      commit to onblur means tapping it and then tapping Save — the obvious
+      sequence — sends nothing, because clearing by script fires no blur.     */
+  out("<span class=\"cx\" id=\"");
+  out(f.fieldName);
+  out("_x\" style=\"visibility:");
+  out((val && val[0]) ? "visible" : "hidden");
+  out("\" onclick=\"var e=document.getElementById('");
+  out(f.fieldName);
+  out("');e.value='';this.style.visibility='hidden';sendStr('");
+  out(f.fieldName);
+  out("','')\">\xC3\x97</span>");   // UTF-8 multiplication sign (×)
+  out("</div>");
   out("</div>");
 }
 
@@ -1860,14 +1889,21 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   //    Apply button when in textarea mode). Class-based so the buttons in
   //    those flows don't carry inline style attributes.
   out(".sb-block{width:100%;display:block;margin:10px 0;}");
-  // -- Inline clear "x" for addTextInput (clearable=true). The input is
-  //    wrapped in .ti-wrap (position:relative) so .cx can sit absolutely
-  //    on the input's right edge. .ti-x adds padding-right on the input
-  //    so the typed text doesn't run under the X. iOS/Safari clear-field
-  //    convention: subtle gray circle, only visible when the input has
-  //    content (toggled by the oninput handler).
+  // -- Inline clear "x", on addText and on single-line addTextInput. The
+  //    input is wrapped in .ti-wrap (position:relative) so .cx can sit
+  //    absolutely on the input's right edge. .ti-x adds padding-right on the
+  //    input so the typed text doesn't run under the x. iOS/Safari
+  //    clear-field convention: subtle gray glyph, only visible when the input
+  //    has content (toggled by the oninput handler).
+  //
+  //    SELECTOR SPECIFICITY IS LOAD-BEARING. This was ".tr input[type=text]
+  //    .ti-x", which ties with the later ".tr input[type=text]{...padding:
+  //    12px...}" block further down the sheet — equal specificity, later
+  //    wins, so the shorthand reset padding-right and long values ran under
+  //    the x. Anchoring on .ti-wrap (0,2,1) beats both and covers addText,
+  //    whose input is not inside a .tr at all.
   out(".ti-wrap{position:relative;flex:1;min-width:0;display:flex;align-items:center;}");
-  out(".tr input[type=text].ti-x{padding-right:38px;}");
+  out(".ti-wrap input[type=text].ti-x{padding-right:38px;}");
   out(".cx{position:absolute;right:10px;top:50%;transform:translateY(-50%);");
   out("color:var(--tl);font-size:1.25rem;line-height:1;cursor:pointer;");
   out("user-select:none;-webkit-tap-highlight-color:transparent;");
