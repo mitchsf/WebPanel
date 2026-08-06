@@ -116,6 +116,11 @@ public:
   // Read-only access to the render buffer pointer (for diagnostic logging,
   // e.g. confirming the buffer landed in PSRAM vs DRAM).
   static const char* bufferPtr() { return _htmlBuf; }
+  // Bytes actually ALLOCATED for the render buffer, which is not always what
+  // setBufferSize() asked for — allocBuffer() falls back to a smaller block
+  // when the heap cannot give it the full amount. Pair with lastRenderLen()
+  // to see how close a page is to truncating.
+  static int  bufferSize()      { return _htmlBufSize; }
 
   // Set the maximum number of fields for this instance. Call before any
   // add*() calls. If not called, defaults to WP_DEFAULT_FIELDS (80).
