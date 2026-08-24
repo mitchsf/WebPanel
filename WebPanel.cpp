@@ -67,6 +67,7 @@ void WebPanel::setRebootOnSave(bool reboot, const String& saveLabel) { _rebootOn
 void WebPanel::setAppIcon(const uint8_t* png, size_t len) {
   _appIconPng = png;
   _appIconLen = png ? len : 0;
+  _iconTagCache = 0;              // recompute the cache-busting fingerprint
 }
 
 void WebPanel::setPWA(bool enabled) { _pwaEnabled = enabled; }
@@ -931,9 +932,36 @@ void WebPanel::handleHealth(WiFiClient& client) {
 // setAppIcon() wins; otherwise the library's built-in nixie-tube default.
 // Effectively-permanent client cache: the icon changes only when a firmware
 // ships a different one, so browsers fetch it roughly once per device.
+void WebPanel::activeIcon(const uint8_t*& png, size_t& len) const {
+  png = _appIconPng ? _appIconPng : WP_DEFAULT_ICON_PNG;
+  len = _appIconPng ? _appIconLen : WP_DEFAULT_ICON_PNG_LEN;
+}
+
+/*  Fingerprint the icon bytes so the URL changes when the artwork does.
+
+    FNV-1a over the PNG, seeded with its length. Scanning ~20-28 KB of
+    memory-mapped flash costs microseconds and happens ONCE per boot — the
+    result is cached, and only setAppIcon() invalidates it. Length alone
+    would nearly always do, but two icons can compress to the same size and
+    the failure mode (a device stuck on the old icon forever) is invisible
+    and unfixable from the client side, so hash the content.                */
+unsigned long WebPanel::iconTag() {
+  if (_iconTagCache) return _iconTagCache;
+  const uint8_t* png; size_t len;
+  activeIcon(png, len);
+  unsigned long h = 2166136261UL ^ (unsigned long)len;
+  for (size_t i = 0; i < len; i++) {
+    h ^= (unsigned long)pgm_read_byte(png + i);
+    h *= 16777619UL;
+  }
+  if (!h) h = 1;                  // 0 is the "not computed" sentinel
+  _iconTagCache = h;
+  return h;
+}
+
 void WebPanel::handleIcon(WiFiClient& client) {
-  const uint8_t* png = _appIconPng ? _appIconPng : WP_DEFAULT_ICON_PNG;
-  size_t len         = _appIconPng ? _appIconLen : WP_DEFAULT_ICON_PNG_LEN;
+  const uint8_t* png; size_t len;
+  activeIcon(png, len);
   char hdr[176];
   int hn = snprintf(hdr, sizeof(hdr),
     "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: %u\r\n"
@@ -954,13 +982,13 @@ void WebPanel::handleManifest(WiFiClient& client) {
   // break the quoting (names are app-supplied plain text in practice).
   String name = _appName.length() ? _appName : _titleLine1;
   name.replace("\\", ""); name.replace("\"", "");
-  char body[320];
+  char body[416];   // names up to 31 ch each + the ?v= fingerprint
   int n = snprintf(body, sizeof(body),
     "{\"name\":\"%s\",\"short_name\":\"%s\",\"start_url\":\"/\","
     "\"display\":\"standalone\",\"background_color\":\"#000000\","
     "\"theme_color\":\"#000000\","
-    "\"icons\":[{\"src\":\"/icon.png\",\"sizes\":\"192x192\",\"type\":\"image/png\"}]}",
-    name.c_str(), name.c_str());
+    "\"icons\":[{\"src\":\"/icon.png?v=%lu\",\"sizes\":\"192x192\",\"type\":\"image/png\"}]}",
+    name.c_str(), name.c_str(), iconTag());
   if (n < 0) n = 0;
   if (n >= (int)sizeof(body)) n = sizeof(body) - 1;
   char hdr[160];
@@ -1702,9 +1730,15 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // because iOS Safari ignores the manifest for icon and full-screen mode.
   // rel=icon also serves as the favicon, quieting /favicon.ico requests.
   if (_pwaEnabled) {
+    // ?v=<fingerprint> on the icon URL — /icon.png is served immutable for a
+    // year, so a client that cached the previous artwork would otherwise keep
+    // it forever (see iconTag()). The route matches on the path prefix, so the
+    // query is ignored server-side and only ever acts as a cache key.
+    char iconHref[40];
+    snprintf(iconHref, sizeof(iconHref), "/icon.png?v=%lu", iconTag());
     out("<link rel=\"manifest\" href=\"/manifest.json\">");
-    out("<link rel=\"icon\" type=\"image/png\" href=\"/icon.png\">");
-    out("<link rel=\"apple-touch-icon\" href=\"/icon.png\">");
+    out("<link rel=\"icon\" type=\"image/png\" href=\""); out(iconHref); out("\">");
+    out("<link rel=\"apple-touch-icon\" href=\""); out(iconHref); out("\">");
     out("<meta name=\"apple-mobile-web-app-capable\" content=\"yes\">");
     // iOS takes the icon label from this meta (not the manifest); Android
     // reads the manifest, which handleManifest() builds from the same name.

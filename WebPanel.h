@@ -428,6 +428,17 @@ private:
   void handleManifest(WiFiClient& client);  // GET /manifest.json — PWA manifest built from the panel title
   const uint8_t* _appIconPng = nullptr;     // nullptr → serve the library default icon
   size_t         _appIconLen = 0;
+  // Which icon is live right now — the setAppIcon() override or the built-in
+  // default. Both the /icon.png route and the manifest need this answer.
+  void          activeIcon(const uint8_t*& png, size_t& len) const;
+  // Content fingerprint of the live icon, appended to the icon URL as ?v=.
+  // /icon.png is served immutable for a year, so without a URL that changes
+  // when the artwork does, a client that has ever fetched the icon keeps the
+  // OLD one forever — reinstalling the home-screen shortcut does not help,
+  // because the URL it refetches is byte-identical. Computed once and cached;
+  // 0 means "not computed yet" (setAppIcon() resets it).
+  unsigned long  _iconTagCache = 0;
+  unsigned long  iconTag();
   bool           _pwaEnabled = false;       // setPWA(true) adds routes + head tags (opt-in)
   String         _appName;                  // icon label; empty → _titleLine1
   void sendOK(WiFiClient& client);
