@@ -107,7 +107,17 @@ public:
 
   // Allocate the static HTML render buffer. Call ONCE early in setup()
   // before any other heap activity to prevent fragmentation.
-  static void allocBuffer();
+  //
+  // Returns true if the buffer is held on return (already-allocated counts).
+  // A RE-allocation after freeBuffer() can genuinely fail: the boot call lands
+  // at a low, stable address on a pristine heap, but a later one competes with
+  // whatever WiFi/TLS has fragmented since, and this is a single ~40 KB
+  // CONTIGUOUS malloc with no retry and no smaller fallback. A caller that
+  // freed the buffer for an OTA MUST check the result — with _htmlBuf null,
+  // serveForm() can only answer 503 "Low memory", permanently, until reboot.
+  // (Two WordClock-5s were found web-dead this way after a weekly no-op
+  // update check: 2026-08-26, cross-project ledger #44.)
+  static bool allocBuffer();
 
   // Free the static HTML render buffer (e.g. before OTA to reclaim heap).
   // allocBuffer() can be called again afterwards to re-allocate.

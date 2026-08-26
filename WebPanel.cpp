@@ -145,8 +145,8 @@ void WebPanel::begin(WiFiServer* server) {
 // Prefers PSRAM when available (ESP32 PICO-V3-02 etc.) so the 40 KB render
 // buffer does not consume scarce internal DRAM. Falls back to DRAM on chips
 // without PSRAM (PICO-D4, PICO-V3).
-void WebPanel::allocBuffer() {
-  if (_htmlBuf != nullptr) return;
+bool WebPanel::allocBuffer() {
+  if (_htmlBuf != nullptr) return true;
   int size = _wantBufSize;
 #if defined(BOARD_HAS_PSRAM) || defined(CONFIG_SPIRAM) || defined(CONFIG_SPIRAM_SUPPORT)
   if (!_preferInternal && psramFound()) {
@@ -169,6 +169,7 @@ void WebPanel::allocBuffer() {
   // still pristine. Each gets one 1 KB allocation, reused across requests.
   _reqBuf.reserve(1024);
   _hdrBuf.reserve(1024);
+  return _htmlBuf != nullptr;
 }
 
 void WebPanel::freeBuffer() {
