@@ -48,6 +48,7 @@ That's the entire app. Connect to the device's WiFi, open `http://192.168.4.1`, 
 - [API reference](#api-reference)
   - [Setup](#setup)
   - [PWA / home-screen icon](#pwa--home-screen-icon)
+  - [REST control: the /fields endpoint](#rest-control-the-fields-endpoint)
   - [Authentication](#authentication)
   - [Field types](#field-types)
   - [Pages and navigation](#pages-and-navigation)
@@ -269,6 +270,27 @@ To generate the header from a PNG: `xxd -i icon.png > myicon.h`, then add `const
 void setPWA(bool enabled);
 ```
 Enable the PWA surface for this panel. **Default disabled** — an app that never calls this behaves byte-identically to the pre-PWA library (no routes, no head tags, browsers never learn the icon exists), so RAM-tight legacy apps are unaffected without any change. When enabled, RAM cost is still near zero: the icon is served straight from flash (+8 bytes static, ~280 bytes more head HTML in the existing render buffer); browsers pull the 28 KB icon roughly once per device due to the immutable cache header.
+
+### REST control: the /fields endpoint
+
+Every panel is already remote-controllable over plain HTTP GET — `/?field=<name>&value=<v>` sets one field (fires the change/text callback exactly as if the user moved the control) and `/?save=1` persists via the save callback. What a script can't know is *which* fields exist. `setFieldsEndpoint(true)` fixes that:
+
+```cpp
+void setFieldsEndpoint(bool enabled);
+```
+
+Serves `GET /fields`: a JSON inventory of every settable field. **Default disabled** — an app that never calls this behaves byte-identically to prior versions. Honors `setAuth()` like every other request. Rendered through the shared HTML buffer, so it costs no additional RAM.
+
+```json
+{ "set": "/?field=<name>&value=<value>", "save": "/?save=1", "fields": [
+  {"name":"br","label":"Brightness","type":"range","page":-1,"value":5,"min":0,"max":9,"step":1},
+  {"name":"mode","label":"LED Effect","type":"dropdown","page":0,"value":2,"options":["Off","Solid","Rainbow"]}
+]}
+```
+
+Per field: `name` (the wire name for `/?field=`), `label`, `type` (`dropdown`, `dropdownRange`, `range`, `number`, `color`, `text`, `textInput`, `checkbox`, `toggle`, `radio`, `time`, `hidden`, `action`, `button`), `page` (-1 = home page), and the current `value` (int, or string for text types). Type-specific extras: `min`/`max`/`step` for range/number, `min`/`max` for dropdownRange, `options` array for dropdown/radio (plus `offset` for offset dropdowns — wire value = option index + offset), `maxLen` for capped text fields. Value conventions: toggles/checkboxes take 0/1, colors take an int RGB, time takes HHMM, action/button fields trigger with `value=1`.
+
+Deliberately omitted: layout-only entries (subheadings, separators, raw HTML, page-nav buttons) and **password fields — the endpoint never serves credentials**.
 
 ### Authentication
 

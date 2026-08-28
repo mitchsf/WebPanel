@@ -185,6 +185,15 @@ public:
   // tags, browsers never learn the 28 KB icon exists). Opt in per panel:
   //   panel.setPWA(true);
   void setPWA(bool enabled);
+  // Enable GET /fields — a machine-readable JSON inventory of every settable
+  // field: name, label, type, page, current value, and the constraints the
+  // type carries (min/max/step, dropdown options, offset). Layout-only
+  // entries (subheadings, separators, raw HTML, page-nav buttons) are
+  // omitted, and so are password fields — the endpoint never serves
+  // credentials. Set a field with GET /?field=<name>&value=<v>, persist with
+  // GET /?save=1. Honors setAuth() like every other request. Default OFF —
+  // with it off the library behaves byte-identically to prior versions.
+  void setFieldsEndpoint(bool enabled);
   // Name shown under the home-screen icon (manifest name/short_name +
   // apple-mobile-web-app-title). Defaults to setTitle() line 1 — set this
   // when the page title carries a suffix (e.g. "Zev-7S Live") that shouldn't
@@ -450,6 +459,9 @@ private:
   unsigned long  _iconTagCache = 0;
   unsigned long  iconTag();
   bool           _pwaEnabled = false;       // setPWA(true) adds routes + head tags (opt-in)
+  bool           _fieldsEndpoint = false;   // setFieldsEndpoint(true) serves GET /fields (opt-in)
+  void handleFieldsJson(WiFiClient& client);  // GET /fields — JSON field inventory
+  void outJsonStr(const char* s);             // out() with JSON string escaping
   String         _appName;                  // icon label; empty → _titleLine1
   void sendOK(WiFiClient& client);
 

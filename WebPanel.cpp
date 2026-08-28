@@ -72,6 +72,8 @@ void WebPanel::setAppIcon(const uint8_t* png, size_t len) {
 
 void WebPanel::setPWA(bool enabled) { _pwaEnabled = enabled; }
 
+void WebPanel::setFieldsEndpoint(bool enabled) { _fieldsEndpoint = enabled; }
+
 void WebPanel::setAppName(const String& name) { _appName = name; }
 
 void WebPanel::addRoute(const char* prefix, WPRouteHandler handler) {
@@ -808,6 +810,14 @@ void WebPanel::handleClient() {
       continue;
     }
 
+    // Machine-readable field inventory (opt-in via setFieldsEndpoint). Runs
+    // after the auth check above, so setAuth() protects it like the form.
+    if (_fieldsEndpoint && req.indexOf("GET /fields") == 0) {
+      handleFieldsJson(client);
+      _reqOK++;
+      continue;
+    }
+
     // Custom routes registered via addRoute() get first crack after /health,
     // before the non-form reject and captive-portal redirect below. Handler
     // owns the full response; on match, count as an OK and move on.
@@ -927,6 +937,143 @@ void WebPanel::handleHealth(WiFiClient& client) {
   client.flush();
   client.stop();
   _reqOK++;
+}
+
+// out() with JSON string escaping — quote, backslash and control bytes are
+// the only characters a JSON string cannot carry raw. Multi-byte escapes are
+// written atomically (skipped whole near the buffer ceiling) so a truncated
+// render can never end mid-escape.
+void WebPanel::outJsonStr(const char* s) {
+  if (!s || !_htmlBuf) return;
+  int max = _htmlBufSize - 1;
+  while (*s) {
+    unsigned char c = (unsigned char)*s++;
+    if (c == '"' || c == '\\') {
+      if (_htmlPos + 2 > max) break;
+      _htmlBuf[_htmlPos++] = '\\';
+      _htmlBuf[_htmlPos++] = (char)c;
+    } else if (c < 0x20) {
+      if (_htmlPos + 6 > max) break;
+      _htmlPos += snprintf(_htmlBuf + _htmlPos, 7, "\\u%04x", c);
+    } else {
+      if (_htmlPos + 1 > max) break;
+      _htmlBuf[_htmlPos++] = (char)c;
+    }
+  }
+  _htmlBuf[_htmlPos] = 0;
+}
+
+// GET /fields — JSON inventory of every settable field (opt-in via
+// setFieldsEndpoint). One object per field: name, label, type, page (-1 =
+// home), current value, plus per-type constraints (min/max/step, dropdown
+// options, offset). Layout-only entries (subheadings, separators, raw HTML,
+// page-nav buttons) are omitted; so are passwords — this endpoint must never
+// serve credentials. Rendered through the shared HTML buffer like a form
+// page, so it costs no additional RAM.
+void WebPanel::handleFieldsJson(WiFiClient& client) {
+  if (!_htmlBuf) allocBuffer();
+  if (!_htmlBuf) {
+    client.print("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                 "Content-Length: 2\r\nConnection: close\r\n\r\n{}");
+    client.flush();
+    client.stop();
+    return;
+  }
+  _htmlPos = 0;
+  _htmlBuf[0] = 0;
+
+  out("{\"set\":\"/?field=<name>&value=<value>\",\"save\":\"/?save=1\",\"fields\":[");
+  bool first = true;
+  for (int i = 0; i < _fieldCount; i++) {
+    WPField& f = _fields[i];
+    const char* type = nullptr;
+    switch (f.type) {
+      case WP_DROPDOWN:        type = "dropdown";      break;
+      case WP_DROPDOWN_OFFSET: type = "dropdown";      break;
+      case WP_DROPDOWN_RANGE:  type = "dropdownRange"; break;
+      case WP_RANGE:           type = "range";         break;
+      case WP_COLORPICKER:     type = "color";         break;
+      case WP_TEXT:            type = "text";          break;
+      case WP_TEXT_INPUT:      type = "textInput";     break;
+      case WP_CHECKBOX:        type = "checkbox";      break;
+      case WP_TOGGLE:          type = "toggle";        break;
+      case WP_RADIO:           type = "radio";         break;
+      case WP_TIME:            type = "time";          break;
+      case WP_NUMBER:          type = "number";        break;
+      case WP_HIDDEN:          type = "hidden";        break;
+      case WP_ACTION_BUTTON:   type = "action";        break;
+      case WP_BUTTON:          type = "button";        break;
+      default: break;  // WP_PASSWORD, WP_SUBHEADING, WP_SEPARATOR, WP_HTML, WP_PAGE_BUTTON
+    }
+    if (!type) continue;
+
+    if (!first) out(",");
+    first = false;
+    out("{\"name\":\"");    outJsonStr(f.fieldName.c_str());
+    out("\",\"label\":\""); outJsonStr(f.label.c_str());
+    out("\",\"type\":\"");  out(type);
+    out("\",\"page\":");    out((int)f.page);
+
+    if (f.strPtr)         { out(",\"value\":\""); outJsonStr(f.strPtr->c_str()); out("\""); }
+    else if (f.presetPtr) { out(",\"value\":");   out(*f.presetPtr); }
+
+    switch (f.type) {
+      case WP_RANGE:
+      case WP_NUMBER:
+        out(",\"min\":");  out(f.minVal);
+        out(",\"max\":");  out(f.maxVal);
+        out(",\"step\":"); out(f.step > 0 ? f.step : 1);
+        break;
+      case WP_DROPDOWN_RANGE:
+        out(",\"min\":"); out(f.minVal);
+        out(",\"max\":"); out(f.maxVal);
+        break;
+      case WP_DROPDOWN_OFFSET:
+        // value = option index + offset; expose the offset so a client can
+        // map the options array back to wire values. Falls through to emit
+        // the options like a plain dropdown.
+        out(",\"offset\":"); out(f.offset);
+        // fall through
+      case WP_DROPDOWN:
+      case WP_RADIO:
+        out(",\"options\":[");
+        if (f.optionsCSV.length()) {
+          const String& csv = f.optionsCSV;
+          int start = 0;
+          bool firstOpt = true;
+          for (;;) {
+            int comma = csv.indexOf(',', start);
+            int end = (comma < 0) ? (int)csv.length() : comma;
+            if (!firstOpt) out(",");
+            firstOpt = false;
+            out("\"");
+            outJsonStr(csv.substring(start, end).c_str());
+            out("\"");
+            if (comma < 0) break;
+            start = comma + 1;
+          }
+        }
+        out("]");
+        break;
+      case WP_TEXT:
+      case WP_TEXT_INPUT:
+        if (f.maxVal > 0) { out(",\"maxLen\":"); out(f.maxVal); }
+        break;
+      default: break;
+    }
+    out("}");
+  }
+  out("]}");
+
+  char headers[160];
+  snprintf(headers, sizeof(headers),
+    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
+    "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+    _htmlPos);
+  client.print(headers);
+  writeAll(client, (const uint8_t*)_htmlBuf, _htmlPos);
+  client.flush();
+  client.stop();
 }
 
 // GET /icon.png — the PWA / home-screen icon. Application override via
