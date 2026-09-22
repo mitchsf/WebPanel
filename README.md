@@ -288,9 +288,11 @@ Serves `GET /fields`: a JSON inventory of every settable field. **Default disabl
 ]}
 ```
 
-Per field: `name` (the wire name for `/?field=`), `label`, `type` (`dropdown`, `dropdownRange`, `range`, `number`, `color`, `text`, `textInput`, `checkbox`, `toggle`, `radio`, `time`, `hidden`, `action`, `button`), `page` (-1 = home page), and the current `value` (int, or string for text types). Type-specific extras: `min`/`max`/`step` for range/number, `min`/`max` for dropdownRange, `options` array for dropdown/radio (plus `offset` for offset dropdowns — wire value = option index + offset), `maxLen` for capped text fields. Value conventions: toggles/checkboxes take 0/1, colors take an int RGB, time takes HHMM, action/button fields trigger with `value=1`.
+Per field: `name` (the wire name for `/?field=`), `label`, `type` (`dropdown`, `dropdownRange`, `range`, `number`, `color`, `text`, `textInput`, `checkbox`, `toggle`, `radio`, `time`, `action`, `button`), `page` (-1 = home page), and the current `value` (int, or string for text types). Type-specific extras: `min`/`max`/`step` for range/number, `min`/`max` for dropdownRange, `options` array for dropdown/radio (plus `offset` for offset dropdowns — wire value = option index + offset), `maxLen` for capped text fields. Value conventions: toggles/checkboxes take 0/1, colors take an int RGB, time takes HHMM, action/button fields trigger with `value=1`.
 
-Deliberately omitted: layout-only entries (subheadings, separators, raw HTML, page-nav buttons) and **password fields — the endpoint never serves credentials**.
+Deliberately omitted: layout-only entries (subheadings, separators, raw HTML, page-nav buttons), hidden controls, controls whose visibility condition is false, and **password fields**. Omitted controls have no entry at all, including no name, label, or value.
+
+Applications can also omit a registered control from this inventory with `excludeFromFields(fieldName)`, called after its `add*()` call. For example, after registering firmware controls, call `panel.excludeFromFields("ota")` and `panel.excludeFromFields("doUpdate")` to leave out the firmware download URL and update action. This only affects `/fields`; the controls still work in the settings form.
 
 ### Authentication
 

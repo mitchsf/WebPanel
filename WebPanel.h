@@ -76,6 +76,7 @@ struct WPField {
   bool     clearable;      // 1 byte — addTextInput only: render an inline "x" clear button
   bool     reloadAfter;    // 1 byte — addActionButton only: poll then reload after the overlay (vs fade to blank)
   bool     stayOnPage;     // 1 byte — addActionButton only: after the result, return to the current sub-page instead of home
+  bool     excludeFromFields; // omit this control entirely from GET /fields
   const char* thumbColor;  // 4 bytes — "r","g","b" for channel tint, or CSS color string, or nullptr
   int16_t  minVal;         // 2 bytes
   int16_t  maxVal;         // 2 bytes
@@ -189,11 +190,13 @@ public:
   // field: name, label, type, page, current value, and the constraints the
   // type carries (min/max/step, dropdown options, offset). Layout-only
   // entries (subheadings, separators, raw HTML, page-nav buttons) are
-  // omitted, and so are password fields — the endpoint never serves
+  // omitted, and so are hidden, conditionally invisible, and password fields — the endpoint never serves
   // credentials. Set a field with GET /?field=<name>&value=<v>, persist with
   // GET /?save=1. Honors setAuth() like every other request. Default OFF —
   // with it off the library behaves byte-identically to prior versions.
   void setFieldsEndpoint(bool enabled);
+  // Call after adding a control to omit it from GET /fields only.
+  void excludeFromFields(const String& field);
   // Name shown under the home-screen icon (manifest name/short_name +
   // apple-mobile-web-app-title). Defaults to setTitle() line 1 — set this
   // when the page title carries a suffix (e.g. "Zev-7S Live") that shouldn't

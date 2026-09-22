@@ -74,6 +74,12 @@ void WebPanel::setPWA(bool enabled) { _pwaEnabled = enabled; }
 
 void WebPanel::setFieldsEndpoint(bool enabled) { _fieldsEndpoint = enabled; }
 
+void WebPanel::excludeFromFields(const String& field) {
+  for (int i = 0; i < _fieldCount; i++) {
+    if (_fields[i].fieldName == field) _fields[i].excludeFromFields = true;
+  }
+}
+
 void WebPanel::setAppName(const String& name) { _appName = name; }
 
 void WebPanel::addRoute(const char* prefix, WPRouteHandler handler) {
@@ -967,7 +973,8 @@ void WebPanel::outJsonStr(const char* s) {
 // setFieldsEndpoint). One object per field: name, label, type, page (-1 =
 // home), current value, plus per-type constraints (min/max/step, dropdown
 // options, offset). Layout-only entries (subheadings, separators, raw HTML,
-// page-nav buttons) are omitted; so are passwords — this endpoint must never
+// page-nav buttons), hidden controls, invisible conditional controls, and
+// explicitly excluded controls are omitted; so are passwords — this endpoint must never
 // serve credentials. Rendered through the shared HTML buffer like a form
 // page, so it costs no additional RAM.
 void WebPanel::handleFieldsJson(WiFiClient& client) {
@@ -987,6 +994,7 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
   for (int i = 0; i < _fieldCount; i++) {
     WPField& f = _fields[i];
     const char* type = nullptr;
+    if (f.excludeFromFields || (f.condition && !f.condition())) continue;
     switch (f.type) {
       case WP_DROPDOWN:        type = "dropdown";      break;
       case WP_DROPDOWN_OFFSET: type = "dropdown";      break;
@@ -1000,10 +1008,9 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
       case WP_RADIO:           type = "radio";         break;
       case WP_TIME:            type = "time";          break;
       case WP_NUMBER:          type = "number";        break;
-      case WP_HIDDEN:          type = "hidden";        break;
       case WP_ACTION_BUTTON:   type = "action";        break;
       case WP_BUTTON:          type = "button";        break;
-      default: break;  // WP_PASSWORD, WP_SUBHEADING, WP_SEPARATOR, WP_HTML, WP_PAGE_BUTTON
+      default: break;  // WP_PASSWORD, WP_HIDDEN, WP_SUBHEADING, WP_SEPARATOR, WP_HTML, WP_PAGE_BUTTON
     }
     if (!type) continue;
 
