@@ -197,6 +197,9 @@ public:
   void setFieldsEndpoint(bool enabled);
   // Call after adding a control to omit it from GET /fields only.
   void excludeFromFields(const String& field);
+  // Call after addPage() to omit all controls on that page from GET /fields.
+  // Applies to existing and subsequently added controls; the UI is unchanged.
+  void excludeCurrentPageFromFields();
   // Name shown under the home-screen icon (manifest name/short_name +
   // apple-mobile-web-app-title). Defaults to setTitle() line 1 — set this
   // when the page title carries a suffix (e.g. "Zev-7S Live") that shouldn't
@@ -405,6 +408,7 @@ private:
   const char* _pageBackHref[WP_MAX_PAGES] = {nullptr};  // Back-button target override (nullptr = "/")
   bool _pageNavHidden[WP_MAX_PAGES] = {false};          // true = no auto nav button on the home page
   bool _pageSaveHidden[WP_MAX_PAGES] = {false};         // true = no Save Settings button on this sub-page
+  bool _pageFieldsExcluded[WP_MAX_PAGES] = {false};
   int    _numPages;
   int    _currentPage;     // page being built: -1 = main
   bool   _mainHasFields;

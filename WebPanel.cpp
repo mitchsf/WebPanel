@@ -80,6 +80,11 @@ void WebPanel::excludeFromFields(const String& field) {
   }
 }
 
+void WebPanel::excludeCurrentPageFromFields() {
+  if (_currentPage >= 0 && _currentPage < _numPages)
+    _pageFieldsExcluded[_currentPage] = true;
+}
+
 void WebPanel::setAppName(const String& name) { _appName = name; }
 
 void WebPanel::addRoute(const char* prefix, WPRouteHandler handler) {
@@ -994,6 +999,7 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
   for (int i = 0; i < _fieldCount; i++) {
     WPField& f = _fields[i];
     const char* type = nullptr;
+    if (f.page >= 0 && f.page < _numPages && _pageFieldsExcluded[f.page]) continue;
     if (f.excludeFromFields || (f.condition && !f.condition())) continue;
     switch (f.type) {
       case WP_DROPDOWN:        type = "dropdown";      break;

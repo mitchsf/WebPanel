@@ -294,6 +294,14 @@ Deliberately omitted: layout-only entries (subheadings, separators, raw HTML, pa
 
 Applications can also omit a registered control from this inventory with `excludeFromFields(fieldName)`, called after its `add*()` call. For example, after registering firmware controls, call `panel.excludeFromFields("ota")` and `panel.excludeFromFields("doUpdate")` to leave out the firmware download URL and update action. This only affects `/fields`; the controls still work in the settings form.
 
+To omit an entire sub-page, call `panel.excludeCurrentPageFromFields()` immediately after its `addPage()` call. All controls assigned to that page are omitted, including controls added later. Other pages and the settings UI are unchanged. For example:
+
+```cpp
+panel.addPage("Clock Live", "System");
+panel.excludeCurrentPageFromFields();
+// Add System-page controls here as usual.
+```
+
 ### Authentication
 
 ```cpp
