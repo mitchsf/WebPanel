@@ -316,11 +316,13 @@ void WebPanel::hidePageSaveButton(int pageIdx) {
 
 void WebPanel::addActionButton(const String& label, const String& fieldName,
                                 const String& confirmMessage, bool reloadAfter,
-                                const String& statusField, bool stayOnPage) {
+                                const String& statusField, bool stayOnPage,
+                                const char* tip) {
   ensureFields();
   if (_fieldCount >= _maxFields) return;
   WPField& f = _fields[_fieldCount++];
   f.type = WP_ACTION_BUTTON;
+  f.tip = tip;
   f.label = label;
   f.fieldName = fieldName;
   f.extraText = confirmMessage;   // reused: confirm message text
@@ -1812,7 +1814,9 @@ void WebPanel::genActionButton(int idx) {
   }
   out(">");
   out(f.label);
+  emitTipIcon(idx);
   out("</button>");
+  emitTipBox(idx);
 }
 
 // -- Tooltip helpers -----------------------------------------------------

@@ -270,7 +270,8 @@ public:
                        const String& confirmMessage = "",
                        bool reloadAfter = false,
                        const String& statusField = "",
-                       bool stayOnPage = false);
+                       bool stayOnPage = false,
+                       const char* tip = nullptr);
 
   // Display a message overlay in the browser using the same style/animation
   // as the "Settings Saved" overlay. Call from inside any callback (change,

@@ -518,10 +518,12 @@ The home page now shows three nav buttons (Network, Display, Diagnostics) and no
 void addActionButton(const String& label, const String& fieldName,
                      const String& confirmMessage = "",
                      bool reloadAfter = false,
-                     const String& statusField = "");
+                     const String& statusField = "",
+                     bool stayOnPage = false,
+                     const char* tip = nullptr);
 ```
 
-Action buttons are always added to the **home page**, regardless of which sub-page is currently being built. They fire your change callback with `value=1` when clicked. They do **not** trigger the Save button to appear, so you can have action-only home pages (e.g. a setup page with only "Start" and "Cancel" buttons).
+Action buttons are added to the current page (home by default). They fire your change callback with `value=1` when clicked. They do **not** trigger the home-page Save button to appear, so you can have action-only home pages (e.g. a setup page with only "Start" and "Cancel" buttons). An optional `tip` adds the standard info icon; tapping it opens the tooltip without firing the action.
 
 Two modes:
 
