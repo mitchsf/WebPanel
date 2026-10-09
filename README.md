@@ -203,7 +203,17 @@ WiFiServer server(80);
 ```cpp
 static void WebPanel::allocBuffer();
 ```
-Allocate the shared HTML render buffer. **Call once, very early in `setup()`** — before WiFi.begin or any other heap activity. Idempotent: safe to call again, no-op if already allocated.
+Allocate the shared HTML render buffer. **Call once, very early in `setup()`** — before WiFi.begin or any other heap activity. Idempotent: safe to call again, no-op if already allocated. Returns `false` if no buffer could be allocated.
+
+Allocation order (1.3.0+): PSRAM first when present (and `setPreferInternal()` is off), at the `setBufferSize()` size (the 40 KB default grows to 64 KB in PSRAM). If that fails, or there is no PSRAM, a **bounded DRAM fallback** runs: a DRAM-only request is tried at its own size, while a request that just failed in PSRAM is capped at 30 KB; either way it steps down 2 KB at a time to a 28 KB floor (or the request itself, if smaller) instead of giving up after one failed `malloc`. `bufferSize()` reports what was actually allocated.
+
+```cpp
+static int  WebPanel::bufferSize();           // bytes actually allocated
+static int  WebPanel::lastRenderLen();        // bytes produced by the last page render
+static bool WebPanel::lastRenderTruncated();  // true if that render hit the ceiling
+bool fieldsReady() const;                     // false if the field array could not be allocated
+```
+Render and allocation introspection. A page render that reaches the buffer ceiling is **not sent**: since 1.3.0 the browser gets `HTTP 503` with "Page exceeds available memory. Please restart the clock and retry." instead of a silently cut-off page with dead script. `fieldsReady()` returns `false` when `setMaxFields()`'s array could not be allocated, in which case every `add*()` is a no-op — check it (with `fieldCount()` / `maxFields()`) after building the forms.
 
 ```cpp
 static void WebPanel::freeBuffer();
@@ -240,6 +250,13 @@ void setSliderStyle(int trackHeight, int thumbSize);
 void begin(WiFiServer* server);
 void handleClient();   // call from loop()
 ```
+
+**`handleClient()` is bounded (1.3.0+).** One call serves up to **4** pending clients and stops starting new ones after **250 ms**, even if connections keep arriving, so the application always gets control back to serve NTP, drive its display and feed its watchdog. Clients left in the backlog are served on the next call. A browser's parallel requests for one page load (the page plus favicon / manifest / icon) fit in a single pass, and with the usual 100 ms `handleClient()` poll any overflow is picked up within one more pass, so page loads stay prompt. Inside a pass every read is bounded too: request-line and header reads stop after 250 ms total (as well as the 50 ms idle gap), leftover request bytes are drained at most 2 KB / 50 ms, and the response send gives up after 5 s total or 2 s without progress.
+
+```cpp
+void setHealthDetails(const char* (*fn)());
+```
+Append application diagnostics to `GET /health`. The callback returns newline-terminated `key=value` lines in storage that outlives the call (a static buffer); the text is added after the library's own keys and clamped to the endpoint's 512-byte body. Pass `nullptr` to disable.
 
 ```cpp
 void setSliderStyle(int trackHeight, int thumbSize);
@@ -535,6 +552,8 @@ Two modes:
 
    With a non-empty `statusField` (only meaningful alongside `reloadAfter`), the poll hits `/?field=<statusField>` instead of `/?ping=1`, and that field's text response is treated as the action's **result**. Because the blocking action doesn't answer the poll until it has finished, the first non-error reply is the genuine outcome — the overlay shows it for ~5 seconds and then navigates home. This makes the result visible **in the overlay** rather than depending on a home-page status box, the browser cache, or a linger window all lining up. Return `""` (or `"OK"`) from the field to mean "no result" (e.g. after a successful update + reboot), which sends the overlay straight home. Wire the field with `addHidden("<statusField>", &dummyInt)` and answer it in your change callback via `panel.showMessage(resultText)`.
 
+   If the action is **still running** when the poll arrives, answer `panel.showMessage("::WAIT::")` — the overlay keeps polling (1.5 s cadence) instead of treating the reply as the result. Anything after the token is shown as interim status text in the overlay (`"::WAIT::Downloading 42%"`); a bare `"::WAIT::"` leaves the current overlay text unchanged.
+
 ```cpp
 panel.addActionButton("Start",         "start",  "\u2713 Starting…");
 panel.addActionButton("Factory Reset", "reset",  "Factory reset…");
@@ -652,11 +671,11 @@ You can run both forms in the same project on the same WebPanel instance — jus
 
 ## Limitations
 
-- **One client at a time.** WebPanel uses synchronous `WiFiClient` reads. If two browsers fetch simultaneously, the second waits ~200 ms. Fine for the intended single-user device-config use case.
+- **One client at a time.** WebPanel uses synchronous `WiFiClient` reads. If two browsers fetch simultaneously, the second waits ~200 ms. Fine for the intended single-user device-config use case. Each `handleClient()` call serves at most 4 clients / 250 ms (see `handleClient()`).
 - **No HTTPS.** Plain HTTP only. The forms are intended for local/AP use; don't expose them on the public internet.
 - **No file upload.** The library handles `GET /?field=...` and `GET /?save=1` only. There's no `POST` parser, no multipart, no file upload.
 - **No JSON output.** Field values are bound to your variables; the library doesn't expose a JSON dump endpoint. Add one yourself if needed.
-- **Static HTML buffer is fixed-size.** If your rendered page exceeds `WP_HTML_BUFFER_SIZE`, the overflow is silently truncated. Bump the buffer or split into more pages.
+- **Static HTML buffer is fixed-size.** If your rendered page reaches the buffer size, the page is refused with HTTP 503 (1.3.0+; earlier versions sent it truncated). Bump the buffer or split into more pages; `lastRenderLen()` shows how close a page is.
 - **Field name parsing is positional.** AJAX requests must arrive in the exact form `/?field=NAME&value=N`. Don't add extra query parameters.
 
 ## Known issue: ESP32 socket memory leak

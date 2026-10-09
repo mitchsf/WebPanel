@@ -163,6 +163,9 @@ public:
   // on these after building their forms rather than discover it on the bench.
   int fieldCount() const { return _fieldCount; }
   int maxFields()  const { return _maxFields; }
+  // False when the field array could not be allocated (heap exhausted at
+  // ensureFields()); every add*() is then a no-op. Check after building forms.
+  bool fieldsReady() const { return _fields != nullptr; }
                                          // Shrinking it frees DRAM for the WiFi/TCP TX path on
                                          // no-PSRAM boards, where a too-large buffer can starve the
                                          // send side and stall large responses. Default WP_HTML_BUFFER_SIZE.
@@ -216,6 +219,11 @@ public:
   // (e.g. "/info/" before "/info") so exact matches win over broader ones.
   // Up to WP_MAX_ROUTES prefixes may be registered.
   void addRoute(const char* prefix, WPRouteHandler handler);
+
+  // Append small application diagnostics to GET /health. The callback returns
+  // key=value lines, each newline-terminated, in storage that outlives the call;
+  // output is clamped to the endpoint's 512-byte body. nullptr disables it.
+  void setHealthDetails(const char* (*fn)()) { _healthDetails = fn; }
 
   // Page management. Two-line variant: line1 (large) + line2 (small).
   // Single-arg variant sets line1 only and leaves line2 empty.
@@ -468,6 +476,7 @@ private:
   unsigned long  iconTag();
   bool           _pwaEnabled = false;       // setPWA(true) adds routes + head tags (opt-in)
   bool           _fieldsEndpoint = false;   // setFieldsEndpoint(true) serves GET /fields (opt-in)
+  const char*  (*_healthDetails)() = nullptr;  // setHealthDetails(): app text appended to /health
   void handleFieldsJson(WiFiClient& client);  // GET /fields — JSON field inventory
   void outJsonStr(const char* s);             // out() with JSON string escaping
   String         _appName;                  // icon label; empty → _titleLine1

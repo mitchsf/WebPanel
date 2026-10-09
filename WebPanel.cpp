@@ -161,18 +161,30 @@ void WebPanel::begin(WiFiServer* server) {
 bool WebPanel::allocBuffer() {
   if (_htmlBuf != nullptr) return true;
   int size = _wantBufSize;
+  bool psramTried = false;
 #if defined(BOARD_HAS_PSRAM) || defined(CONFIG_SPIRAM) || defined(CONFIG_SPIRAM_SUPPORT)
   if (!_preferInternal && psramFound()) {
     // PSRAM is plentiful — when the app hasn't overridden the size via
     // setBufferSize(), grow the default 40 KB to 64 KB so long pages
     // (64-rule schedule tables, healing grids) can't outrun the buffer.
     if (size == WP_HTML_BUFFER_SIZE) size = 65536;
+    psramTried = true;
     _htmlBuf = (char*)ps_malloc(size);
   }
 #endif
   if (_htmlBuf == nullptr) {
-    size = _wantBufSize;   // DRAM fallback keeps the conservative size
-    _htmlBuf = (char*)malloc(size);
+    // Bounded DRAM fallback. A DRAM-only request is tried at its own size;
+    // after a PSRAM failure the (PSRAM-sized) request is capped at 30 KB so
+    // the fallback cannot swallow the internal heap TLS and WiFi need. Either
+    // way step down 2 KB at a time to a 28 KB floor (or the request itself,
+    // if smaller) rather than giving up after one failed malloc — a
+    // fragmented heap often still has a 28 KB block when it lacks 30 KB.
+    int start = psramTried ? min(_wantBufSize, 30720) : _wantBufSize;
+    int floorSize = min(start, 28672);
+    for (size = start; size >= floorSize; size -= 2048) {
+      _htmlBuf = (char*)malloc(size);
+      if (_htmlBuf) break;
+    }
   }
   if (_htmlBuf) {
     _htmlBufSize = size;
@@ -736,10 +748,18 @@ void WebPanel::setFieldLabel(const String& fieldName, const String& label) {
 void WebPanel::handleClient() {
   if (!_server) return;
 
-  // Drain all pending clients — browsers open multiple parallel connections
-  // and ESP32 WiFiServer has a small backlog. Processing only one per call
-  // can starve later connections and make the form unresponsive.
-  while (_server->hasClient()) {
+  // Serve several pending clients per call — browsers open parallel
+  // connections (page + favicon/manifest/icon) and ESP32 WiFiServer has a
+  // small backlog, so handling only one per call would starve the later ones.
+  // But BOUND the pass (at most 4 clients, at most 250 ms) even if clients
+  // keep refilling the backlog: the application must regain control to serve
+  // NTP, drive its display and feed its task watchdog. Anything left over is
+  // served on the next call — with the 100 ms poll the apps use, a page load's
+  // parallel requests all land within one or two passes.
+  const unsigned long passStart = millis();
+  unsigned handled = 0;
+  while (handled < 4 && millis() - passStart < 250 && _server->hasClient()) {
+    ++handled;
     WiFiClient client = _server->accept();
     if (!client) break;
 
@@ -769,9 +789,11 @@ void WebPanel::handleClient() {
     // String req = readStringUntil('\r') so that we don't pay an alloc/free
     // pair (and a sequence of realloc copies) per request.
     _reqBuf = "";
+    // Each read loop is also capped at 250 ms TOTAL, so a client trickling
+    // one byte every 49 ms cannot hold the idle timer open indefinitely.
     {
-      unsigned long lastByte = millis();
-      while (millis() - lastByte < 50) {
+      unsigned long readStart = millis(), lastByte = readStart;
+      while (millis() - readStart < 250 && millis() - lastByte < 50) {
         int c = client.read();
         if (c < 0) { delay(1); continue; }
         lastByte = millis();
@@ -788,10 +810,10 @@ void WebPanel::handleClient() {
     // hard ~50 ms floor to EVERY request the moment auth was enabled.
     if (_authPass && _authPass->length() > 0) {
       _hdrBuf = "";
-      unsigned long lastByte = millis();
+      unsigned long readStart = millis(), lastByte = readStart;
       const char eohPat[4] = { '\r', '\n', '\r', '\n' };
       int eoh = 0;  // matched length of the end-of-headers sequence
-      while (millis() - lastByte < 50) {
+      while (millis() - readStart < 250 && millis() - lastByte < 50) {
         int c = client.read();
         if (c < 0) {
           if (!client.connected()) break;
@@ -811,8 +833,11 @@ void WebPanel::handleClient() {
         continue;
       }
     } else {
-      // Drain remaining data without storing it
-      while (client.available()) client.read();
+      // Drain remaining data without storing it — bounded (2 KB / 50 ms) so
+      // a client streaming garbage cannot pin the loop here.
+      unsigned long drainStart = millis();
+      unsigned drained = 0;
+      while (drained < 2048 && millis() - drainStart < 50 && client.available()) { client.read(); ++drained; }
     }
 
     // Minimal diagnostic endpoint. Plain text key=value, stack-local buffer,
@@ -938,6 +963,16 @@ void WebPanel::handleHealth(WiFiClient& client) {
     WiFi.localIP().toString().c_str());
   if (n < 0) n = 0;
   if (n >= (int)sizeof(body)) n = sizeof(body) - 1;
+  // Optional application diagnostics (setHealthDetails), appended after the
+  // library's own keys and clamped to the same stack buffer.
+  if (_healthDetails && n < (int)sizeof(body) - 1) {
+    const char* details = _healthDetails();
+    if (details) {
+      int dn = snprintf(body + n, sizeof(body) - n, "%s", details);
+      if (dn > 0) n += dn;
+      if (n >= (int)sizeof(body)) n = sizeof(body) - 1;
+    }
+  }
 
   char hdr[192];
   int hn = snprintf(hdr, sizeof(hdr),
@@ -2390,7 +2425,19 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("var t=setTimeout(function(){c.abort();},4000);");
   out("var u=sf?('/?field='+sf+'&value='+Date.now()):'/?ping=1';");
   out("fetch(u,{cache:'no-store',signal:c.signal}).then(function(r){clearTimeout(t);");
-  out("if(sf){r.text().then(function(m){show(m&&m!=='OK'?m:'');});}else{home();}})");
+  // '::WAIT::' (optionally followed by interim status text) means the action
+  // is still running: show the text if there is any, and keep polling. Only
+  // a status-field action button can receive it, so the branch is emitted
+  // only on pages that carry one — every other page (notably long rule-table
+  // pages sized against a DRAM buffer) pays nothing for it.
+  bool waitJs = false;
+  for (int i = 0; i < _fieldCount; i++) {
+    const WPField& af = _fields[i];
+    if (af.page == page && af.type == WP_ACTION_BUTTON && af.reloadAfter && af.optionsCSV.length() > 0) { waitJs = true; break; }
+  }
+  out("if(sf){r.text().then(function(m){");
+  if (waitJs) out("if(m.indexOf('::WAIT::')===0){var e=document.querySelector('.saved-inner'),w=m.substring(8);if(e&&w)e.textContent=w;setTimeout(poll,1500);return;}");
+  out("show(m&&m!=='OK'?m:'');});}else{home();}})");
   out(".catch(function(){clearTimeout(t);setTimeout(poll,1500);});};setTimeout(poll,3000);return;}");
   out("setTimeout(function(){var o=document.querySelector('.saved-overlay');");
   out("if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}");
@@ -2458,6 +2505,16 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out("try{var _y=sessionStorage.getItem('wpsy');if(_y!==null){sessionStorage.removeItem('wpsy');window.scrollTo(0,parseInt(_y)||0);}}catch(e){}");
   out("</script></body></html>");
 
+  // A render that reached the buffer ceiling is a cut-off page — the browser
+  // would show a half-built form with dead script. Refuse it explicitly.
+  _lastRenderLen   = _htmlPos;
+  _lastRenderTrunc = (_htmlPos >= _htmlBufSize - 1);
+  if (_lastRenderTrunc) {
+    client.print("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nPage exceeds available memory. Please restart the clock and retry.");
+    client.stop();
+    return;
+  }
+
   // Send headers + body. Use a small char buffer for the headers to avoid String.
   // Cache-Control: no-store prevents browsers from caching the form HTML, so
   // that changes to page names / field bindings / etc. take effect on the
@@ -2468,8 +2525,6 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
     _htmlPos);
   client.print(headers);
-  _lastRenderLen   = _htmlPos;
-  _lastRenderTrunc = (_htmlPos >= _htmlBufSize - 1);
   writeAll(client, (const uint8_t*)_htmlBuf, _htmlPos);
   client.flush();
   client.stop();
@@ -2488,14 +2543,16 @@ void WebPanel::writeAll(WiFiClient& client, const uint8_t* buf, int len) {
   int sent = 0;
   unsigned long start = millis();
   unsigned long lastProgress = start;
-  // 2 s NO-PROGRESS ceiling. The timer resets on every successful write, so a
+  // 5 s TOTAL ceiling plus a 2 s NO-PROGRESS ceiling. The no-progress timer resets on every successful write, so a
   // healthy or merely-slow (but advancing) client never trips it — it only
   // bounds how long a genuinely dead/stalled socket can block the caller's
   // loop(). Kept short so that callers whose loop also services time-critical
   // work (single-loop clocks under a 30 s software watchdog, NtpServer's UDP
   // request servicing) aren't stalled long, even if handleClient() drains
   // several stalled sockets back-to-back in one pass.
-  while (sent < len && client.connected() && millis() - lastProgress < 2000) {
+  // The 5 s total ceiling bounds a client that ACKs just often enough to
+  // keep the no-progress timer alive (a trickle-reader).
+  while (sent < len && client.connected() && millis() - start < 5000 && millis() - lastProgress < 2000) {
     int n = len - sent;
     if (n > CHUNK) n = CHUNK;
     size_t w = client.write(buf + sent, n);
