@@ -467,6 +467,8 @@ void addCheckbox(const String& label, const String& field, int* preset,
 ```
 Bound int is `0` (unchecked) or `1` (checked).
 
+Since 1.3.1 checkbox and toggle labels use the same heading style as the label above a dropdown or slider (uppercase, 0.9 rem, semi-bold, muted `--ts` colour), so every field heading on a page matches. Radio options keep normal text; the radio group heading already used that style.
+
 #### Radio group
 
 ```cpp

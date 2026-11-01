@@ -2163,7 +2163,9 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // width:fit-content shrinks the label to just its checkbox + text + icon so
   // clicks in the empty space to the right of the row don't toggle the input.
   out(".cb-label{display:flex;align-items:center;cursor:pointer;width:fit-content;max-width:100%;");
-  out("font-size:1rem;font-weight:500;color:var(--tp);padding:6px 0;min-height:44px;}");
+  // Same look as the .fl heading above a dropdown/slider (uppercase, muted).
+  out("font-size:.9rem;font-weight:600;color:var(--ts);text-transform:uppercase;letter-spacing:.5px;");
+  out("padding:6px 0;min-height:44px;}");
   out(".cb-label input[type=checkbox]{width:22px;height:22px;margin-right:12px;");
   out("cursor:pointer;accent-color:var(--pc);}");
 
@@ -2171,7 +2173,9 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   out(".sw-group{margin-bottom:8px;}");
   // Label text on the left, the pill pushed to the right edge of the row.
   out(".sw-label{display:flex;align-items:center;cursor:pointer;width:100%;max-width:100%;");
-  out("font-size:1rem;font-weight:500;color:var(--tp);padding:6px 0;min-height:44px;}");
+  // Same look as the .fl heading above a dropdown/slider (uppercase, muted).
+  out("font-size:.9rem;font-weight:600;color:var(--ts);text-transform:uppercase;letter-spacing:.5px;");
+  out("padding:6px 0;min-height:44px;}");
   out(".sw-text{flex:1;}");
   // Hide the native checkbox; the track+knob spans render the control.
   out(".sw-input{position:absolute;opacity:0;width:0;height:0;margin:0;}");
