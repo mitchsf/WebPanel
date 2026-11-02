@@ -507,7 +507,7 @@ Switch back to the home page so that subsequent `add*()` calls bind to it. Usefu
 
 `line1` is the large header on that sub-page; `line2` is the smaller subtitle. The navigation button label on the home page uses `line2` if non-empty, otherwise `line1`.
 
-When the home page has any of its own fields (added before any `addPage()` call), a "Save Settings" button appears at the bottom of the home page. If the home page has only navigation buttons (no fields), the Save button is suppressed.
+When the home page has any of its own fields (added before any `addPage()` call), a "Save Settings" button appears at the bottom of the home page. If the home page has only navigation buttons (no fields), the Save button is suppressed. Since 1.3.2, `hidePageSaveButton(-1)` hides the home page's Save button too, for a single-page form whose action button (for example Start) commits everything.
 
 ```cpp
 void setupForm() {

@@ -322,6 +322,7 @@ void WebPanel::hidePageNavButton(int pageIdx) {
 }
 
 void WebPanel::hidePageSaveButton(int pageIdx) {
+  if (pageIdx == -1) _homeSaveHidden = true;
   if (pageIdx >= 0 && pageIdx < WP_MAX_PAGES) _pageSaveHidden[pageIdx] = true;
 }
 
@@ -2296,7 +2297,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // Buttons
   const char* saveTxt = _saveLabel.length() ? _saveLabel.c_str() : "Save Settings";
   if (page == -1) {
-    if (_mainHasFields) {
+    if (_mainHasFields && !_homeSaveHidden) {
       out("<div class=\"sep\"></div>");
       out("<button type=\"button\" class=\"save-btn\" onclick=\"save()\">");
       out(saveTxt);

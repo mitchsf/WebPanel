@@ -243,7 +243,8 @@ public:
   // hidePageSaveButton: suppress this sub-page's Save Settings button — for
   // pages whose controls all persist immediately on change (e.g. a TubeHealer
   // Healing page), where a Save button only invites confusion. The Back
-  // button still renders.
+  // button still renders. pageIdx -1 = the home page (1.3.2+): a single-page
+  // form whose home-page action button (e.g. Start) commits everything.
   void hidePageSaveButton(int pageIdx);
 
   void addPage(const String& line1, const String& line2 = "",
@@ -421,6 +422,7 @@ private:
   int    _numPages;
   int    _currentPage;     // page being built: -1 = main
   bool   _mainHasFields;
+  bool   _homeSaveHidden = false;                        // hidePageSaveButton(-1)
   bool   _rebootOnSave;
   String _saveLabel;       // overrides "Save Settings" button text when non-empty
   int    _sliderTrack;     // track height in px (default 6)
