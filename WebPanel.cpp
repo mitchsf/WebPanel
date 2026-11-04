@@ -7,6 +7,485 @@
 #include "mbedtls/base64.h"
 #include <sys/socket.h>
 
+// ---- Static page assets (1.4.0) ------------------------------------------
+// The CSS and JS every page needs, kept in flash (memory-mapped on ESP32) and
+// served as /wp.css and /wp.js with a one-year immutable cache, keyed by
+// WP_ASSET_VER on the URL. Edit the text here exactly as before; bump
+// WP_ASSET_VER in WebPanel.h whenever either array changes so cached browsers
+// fetch the new copy.
+static const char WP_CSS[] PROGMEM =
+
+  // -- Design tokens --
+  ":root{"
+  "--pc:#3b82f6;--ph:#2563eb;--pd:#1d4ed8;"
+  "--sc:#10b981;--sh:#059669;"
+  "--bg:#f1f5f9;--cb:#ffffff;"
+  "--tp:#0f172a;--ts:#64748b;--tl:#94a3b8;"
+  "--br:#e2e8f0;--bf:#3b82f6;"
+  "--r:12px;--ri:10px;"
+  // NOTE: 'thumb' name (not 'ts') because --ts is already used for
+  // text-secondary color. Reusing --ts here made the thumb width
+  // collapse to an invalid value in dark mode where --ts is set to a
+  // color, causing sliders to be ungrabbable on iPhones in dark mode.
+  // Defaults (WebPanel() sets 6 / 22); the page emits a :root override with
+  // the panel's own values right after the stylesheet link.
+  "--th:6px;--thumb:22px;"
+  "--sh-sm:0 1px 3px rgba(0,0,0,.08);"
+  "--sh-md:0 4px 12px rgba(0,0,0,.1);"
+  "--sh-lg:0 12px 28px rgba(0,0,0,.12);"
+  "--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"
+  // Tooltip surface (GitHub convention: dark in light mode, slightly lighter
+  // dark in dark mode so the bubble pops off the already-dark page).
+  "--tt-bg:#0f172a;--tt-fg:#ffffff;"
+  "}"
+  // -- Dark mode — redefine the design tokens. Triggers automatically when
+  //    the OS / browser is set to dark.
+  "@media (prefers-color-scheme:dark){:root{"
+  "--bg:#0f172a;--cb:#1e293b;"
+  "--tp:#e2e8f0;--ts:#94a3b8;--tl:#64748b;"
+  "--br:#334155;"
+  "--tt-bg:#475569;--tt-fg:#ffffff;"
+  "--sh-sm:0 1px 3px rgba(0,0,0,.4);"
+  "--sh-md:0 4px 12px rgba(0,0,0,.5);"
+  "--sh-lg:0 12px 28px rgba(0,0,0,.6);"
+  "}}"
+
+  // -- Reset & base --
+  "*{box-sizing:border-box;margin:0;padding:0;}"
+  "html,body{overflow-x:hidden;max-width:100%;}"
+  // Stop the rubber-band over-scroll past the page's edges (both axes) so long
+  // pages (e.g. the Rule Editor) can't be flung off-screen vertically or panned
+  // sideways — they lock at their natural boundaries like the short pages. (iOS
+  // Safari support for this on the root scroller is version-dependent; harmless
+  // where unsupported.)
+  // touch-action blocks the horizontal-pan GESTURE at the touch layer. The
+  // overflow/overscroll rules above are ignored by captive-portal mini-
+  // browsers (iOS CNA / Android sign-in WebView — where the AP setup form
+  // renders), which let any page rubber-band sideways; touch-action IS
+  // honored there (WKWebView since iOS 13). pan-y keeps vertical scroll,
+  // pinch-zoom keeps zoom; no element in WebPanel or the rule table scrolls
+  // horizontally, and range sliders benefit (horizontal drags can't be
+  // claimed as page panning).
+  "body{overscroll-behavior:none;touch-action:pan-y pinch-zoom;}"
+  // Bump the root font-size so all rem-based text scales up ~6%. Container
+  // max-width stays in px so the form's width is unchanged; only text grows.
+  "html{font-size:17px;}"
+  "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;"
+  "background:var(--bg);color:var(--tp);line-height:1.6;padding:16px;"
+  "-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}"
+
+  // -- Container --
+  // Clip HORIZONTAL overflow here so a child a few px wider than the viewport
+  // (a width:100% field + padding, or the iOS time input) can't pan the whole
+  // page sideways — iOS Safari doesn't reliably honor overflow-x:hidden on the
+  // root/body scroller, but does on a normal element like this. overflow-x:clip
+  // keeps overflow-y visible (no scroll container) so vertical page scroll is
+  // unchanged; the plain overflow-x:hidden is a fallback for browsers without
+  // clip. Tooltips are unaffected: open ones are position:fixed (escape the
+  // clip) and closed ones are collapsed to zero size.
+  "#container{max-width:640px;margin:0 auto;background:var(--cb);"
+  "border-radius:var(--r);box-shadow:var(--sh-lg);overflow-x:hidden;overflow-x:clip;}"
+
+  // -- Header --
+  "#header{background:linear-gradient(135deg,var(--pc),var(--pd));"
+  "color:#fff;text-align:center;font-size:clamp(1.1rem,5vw,1.7rem);font-weight:700;"
+  "padding:8px 24px;letter-spacing:-.3px;line-height:1.1;white-space:nowrap;"
+  "border-radius:var(--r) var(--r) 0 0;}"
+  "#header .hl2{display:block;font-size:clamp(0.9rem,4vw,1.4rem);font-weight:500;"
+  "opacity:0.92;margin-top:1px;letter-spacing:0;line-height:1.1;}"
+
+  // -- Form area --
+  "#inputs{padding:24px;}"
+
+  // -- Field group --
+  ".fg{margin-bottom:20px;position:relative;}"
+  ".fl{display:block;font-size:.9rem;font-weight:600;color:var(--ts);"
+  "text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}"
+
+  // -- Tooltip info icon and dark bubble tooltip --
+  ".info{display:inline-block;margin-left:6px;font-size:1.1rem;"
+  "color:var(--pc);cursor:pointer;user-select:none;line-height:1;}"
+  // Dark slate bubble — portal'd to <body> and positioned via JS (position:
+  // fixed, centered horizontally, vertical anchored to icon). Outer .tt is
+  // the flex container; inner .tt-i is the scrollable region with the
+  // scrollbar hidden (the wheel handler drives the scroll explicitly,
+  // which also works around an Edge bug where wheel events over an
+  // overflow:auto element sometimes route to the page underneath).
+  // position:absolute (default) keeps closed tooltips out of document flow;
+  // JS overrides to position:fixed when opening to portal them into body.
+  ".tt{position:absolute;box-sizing:border-box;z-index:100;"
+  "background:var(--tt-bg);color:var(--tt-fg);border:none;border-radius:12px;"
+  "font-size:.9rem;font-weight:400;line-height:1.4;"
+  "text-transform:none;letter-spacing:0;"
+  "box-shadow:0 6px 16px rgba(0,0,0,.25);cursor:pointer;"
+  "display:flex;flex-direction:column;"
+  "opacity:0;visibility:hidden;"
+  "transition:opacity .15s ease,visibility .15s;pointer-events:none;}"
+  ".tt.open{opacity:1;visibility:visible;pointer-events:auto;}"
+  // Collapse CLOSED tooltips to zero box height. A closed .tt is position:
+  // absolute and invisible, but its box still extends the page's scrollable
+  // height — and a large tip (e.g. the Rule Editor's full schema doc) creates
+  // a big invisible scroll dead-zone you can scroll the form into / off. Only
+  // closed tips are collapsed; open tips are position:fixed (set by tipToggle)
+  // and unaffected by :not(.open), so this changes nothing about how tips show.
+  ".tt:not(.open){max-height:0;overflow:hidden;}"
+  ".tt-i{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;"
+  "padding:10px 14px;overflow-wrap:anywhere;word-break:break-word;"
+  "overscroll-behavior:contain;scrollbar-width:none;}"
+  ".tt-i::-webkit-scrollbar{width:0;height:0;background:transparent;}"
+
+  // -- Inputs (shared) --
+  "select,input[type=text],input[type=password],input[type=number],input[type=time]{"
+  "width:100%;height:48px;padding:10px 14px;font-size:1rem;font-family:inherit;"
+  "border:1.5px solid var(--br);border-radius:var(--ri);background:var(--cb);"
+  "outline:none;color:var(--tp);transition:border-color .15s,box-shadow .15s;}"
+  // iOS Safari time input fix — native rendering adds internal padding that
+  // ignores box-sizing and overflows the container.
+  "input[type=time]{-webkit-appearance:none;appearance:none;"
+  "min-width:0;max-width:100%;box-sizing:border-box;}"
+  // addHourMinute: hours and minutes selects on one row, joined by a colon
+  ".hm{display:flex;align-items:center;gap:10px;}.hm select{flex:1;min-width:0;}"
+  ".hm b{font-size:1.25rem;color:var(--ts);}"
+  "select:focus,input[type=text]:focus,input[type=password]:focus,"
+  "input[type=number]:focus,input[type=time]:focus{"
+  "border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,.15);}"
+
+  // -- Range slider (cross-browser) --
+  ".rc{display:flex;align-items:center;gap:14px;}"
+  "input[type=range]{flex:1;height:var(--th);appearance:none;-webkit-appearance:none;"
+  "background:var(--br);border-radius:calc(var(--th)/2);outline:none;cursor:pointer;}"
+  "input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;"
+  "width:var(--thumb);height:var(--thumb);background:var(--tc,var(--pc));border-radius:50%;cursor:pointer;"
+  "box-shadow:0 1px 4px rgba(0,0,0,.2);transition:transform .15s,background .1s;}"
+  "input[type=range]::-moz-range-thumb{width:var(--thumb);height:var(--thumb);background:var(--tc,var(--pc));"
+  "border-radius:50%;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2);}"
+  "input[type=range]:active::-webkit-slider-thumb{transform:scale(1.15);}"
+  "input[type=range]:active::-moz-range-thumb{transform:scale(1.15);}"
+  ".rv{background:var(--tc,var(--pc));color:#fff;padding:2px 10px;border-radius:8px;"
+  "font-size:.85rem;font-weight:700;min-width:32px;text-align:center;transition:background .1s;}"
+
+  // -- Color picker (cross-browser) --
+  "input[type=color]{width:100%;height:48px;padding:3px;border:1.5px solid var(--br);"
+  "border-radius:var(--ri);cursor:pointer;appearance:none;-webkit-appearance:none;"
+  "background:var(--cb);transition:border-color .15s;}"
+  "input[type=color]::-webkit-color-swatch-wrapper{padding:0;}"
+  "input[type=color]::-webkit-color-swatch{border:none;border-radius:7px;}"
+  "input[type=color]::-moz-color-swatch{border:none;border-radius:7px;}"
+  "input[type=color]:focus,input[type=color]:hover{border-color:var(--bf);}"
+
+  // -- Subheading --
+  ".sh{font-size:1.1rem;font-weight:700;color:var(--tp);"
+  "margin:28px 0 16px 0;padding-bottom:8px;border-bottom:2px solid var(--br);}"
+  ".sh:first-child{margin-top:0;}"
+
+  // -- Separator --
+  ".sep{width:100%;height:1px;background:var(--br);margin:24px 0;}"
+
+  // -- Text input with button --
+  ".tr{display:flex;gap:8px;align-items:center;}"
+  ".tr input[type=text]{flex:1;}"
+  ".sb{height:48px;padding:0 18px;font-size:1.05rem;font-weight:600;color:#fff;font-family:inherit;"
+  "background:var(--pc);border:none;border-radius:var(--ri);cursor:pointer;"
+  "white-space:nowrap;transition:background .15s;}"
+  ".sb:active{background:var(--pd);}"
+  // -- Full-width button modifier (used by addButton and addTextInput's
+  //    Apply button when in textarea mode). Class-based so the buttons in
+  //    those flows don't carry inline style attributes.
+  ".sb-block{width:100%;display:block;margin:10px 0;}"
+  // -- Inline clear "x", on addText and on single-line addTextInput. The
+  //    input is wrapped in .ti-wrap (position:relative) so .cx can sit
+  //    absolutely on the input's right edge. .ti-x adds padding-right on the
+  //    input so the typed text doesn't run under the x. iOS/Safari
+  //    clear-field convention: subtle gray glyph, only visible when the input
+  //    has content (toggled by the oninput handler).
+  //
+  //    SELECTOR SPECIFICITY IS LOAD-BEARING. This was ".tr input[type=text]
+  //    .ti-x", which ties with the later ".tr input[type=text]{...padding:
+  //    12px...}" block further down the sheet — equal specificity, later
+  //    wins, so the shorthand reset padding-right and long values ran under
+  //    the x. Anchoring on .ti-wrap (0,2,1) beats both and covers addText,
+  //    whose input is not inside a .tr at all.
+  ".ti-wrap{position:relative;flex:1;min-width:0;display:flex;align-items:center;}"
+  ".ti-wrap input[type=text].ti-x{padding-right:38px;}"
+  ".cx{position:absolute;right:10px;top:50%;transform:translateY(-50%);"
+  "color:var(--tl);font-size:1.25rem;line-height:1;cursor:pointer;"
+  "user-select:none;-webkit-tap-highlight-color:transparent;"
+  "padding:4px;transition:color .15s;}"
+  ".cx:hover{color:var(--ts);}"
+  ".cx:active{color:var(--tp);}"
+  // -- Textarea (multi-line input, rendered when rows>1 in addTextInput) --
+  ".ta{width:100%;font-family:var(--mono);font-size:14px;padding:8px;"
+  "border:1.5px solid var(--br);border-radius:var(--ri);background:var(--cb);"
+  "color:var(--tp);resize:vertical;box-sizing:border-box;outline:none;"
+  "transition:border-color .15s,box-shadow .15s;}"
+  ".ta:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,.15);}"
+
+  // -- Password --
+  ".pw{display:flex;align-items:center;gap:10px;}"
+  ".pw input[type=password],.pw input[type=text]{flex:1;}"
+  ".sp{display:flex;align-items:center;cursor:pointer;font-size:.8rem;"
+  "color:var(--ts);white-space:nowrap;user-select:none;}"
+  ".sp input[type=checkbox]{width:16px;height:16px;margin-right:5px;cursor:pointer;}"
+
+  // -- Checkbox --
+  ".cb-group{margin-bottom:8px;}"
+  // width:fit-content shrinks the label to just its checkbox + text + icon so
+  // clicks in the empty space to the right of the row don't toggle the input.
+  ".cb-label{display:flex;align-items:center;cursor:pointer;width:fit-content;max-width:100%;"
+  // Same look as the .fl heading above a dropdown/slider (uppercase, muted).
+  "font-size:.9rem;font-weight:600;color:var(--ts);text-transform:uppercase;letter-spacing:.5px;"
+  "padding:6px 0;min-height:44px;}"
+  ".cb-label input[type=checkbox]{width:22px;height:22px;margin-right:12px;"
+  "cursor:pointer;accent-color:var(--pc);}"
+
+  // -- Toggle switch (sliding pill; same 0/1 as checkbox) --
+  ".sw-group{margin-bottom:8px;}"
+  // Label text on the left, the pill pushed to the right edge of the row.
+  ".sw-label{display:flex;align-items:center;cursor:pointer;width:100%;max-width:100%;"
+  // Same look as the .fl heading above a dropdown/slider (uppercase, muted).
+  "font-size:.9rem;font-weight:600;color:var(--ts);text-transform:uppercase;letter-spacing:.5px;"
+  "padding:6px 0;min-height:44px;}"
+  ".sw-text{flex:1;}"
+  // Hide the native checkbox; the track+knob spans render the control.
+  ".sw-input{position:absolute;opacity:0;width:0;height:0;margin:0;}"
+  ".sw-track{position:relative;flex:0 0 auto;width:46px;height:26px;border-radius:13px;"
+  "background:var(--bd,#bbb);transition:background .2s;margin-left:12px;}"
+  ".sw-knob{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;"
+  "background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4);transition:left .2s;}"
+  ".sw-input:checked + .sw-track{background:var(--pc);}"
+  ".sw-input:checked + .sw-track .sw-knob{left:23px;}"
+
+  // -- Radio --
+  ".rd-group{margin-bottom:4px;}"
+  ".rd-label{display:flex;align-items:center;cursor:pointer;"
+  "font-size:1rem;font-weight:500;color:var(--tp);padding:6px 0;min-height:44px;}"
+  ".rd-label input[type=radio]{width:22px;height:22px;margin-right:12px;"
+  "cursor:pointer;accent-color:var(--pc);}"
+
+  // -- Page nav button --
+  ".page-btn{display:block;width:100%;padding:12px;font-size:1.05rem;font-weight:600;"
+  "color:#fff;background:var(--pc);border:none;border-radius:var(--r);"
+  "cursor:pointer;text-align:center;text-decoration:none;"
+  "transition:background .15s,box-shadow .15s;margin-bottom:10px;box-shadow:var(--sh-sm);}"
+  ".page-btn:active{background:var(--pd);}"
+
+  // -- Back button --
+  ".back-btn{display:block;width:100%;padding:12px;font-size:1.05rem;font-weight:600;"
+  "color:var(--ts);background:var(--bg);border:1.5px solid var(--br);"
+  "border-radius:var(--r);cursor:pointer;text-align:center;text-decoration:none;"
+  "transition:border-color .15s,color .15s;margin-top:12px;}"
+  ".back-btn:active{border-color:var(--ts);color:var(--tp);}"
+
+  // -- Text input with send button --
+  ".tr{display:flex;gap:10px;align-items:center;}"
+  ".tr input[type=text]{flex:1;height:48px;padding:12px;font-size:1.1rem;"
+  "border:2px solid var(--br);border-radius:8px;background:var(--cb);outline:none;}"
+  ".tr input[type=text]:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,0.1);}"
+  ".sb{height:48px;padding:0 20px;font-size:1.05rem;font-weight:600;color:#fff;"
+  "background:var(--pc);border:none;border-radius:8px;cursor:pointer;white-space:nowrap;transition:background 0.2s;}"
+  ".sb:active{background:var(--ph);}"
+
+  // -- Save button --
+  ".save-btn{width:100%;padding:12px;font-size:1.05rem;font-weight:700;font-family:inherit;"
+  "color:#fff;background:var(--sc);border:none;border-radius:var(--r);"
+  "cursor:pointer;margin-top:16px;box-shadow:var(--sh-sm);"
+  "transition:background .15s,box-shadow .15s;}"
+  ".save-btn:active{background:var(--sh);}"
+
+  // -- Action button (e.g., Start) ---------------------------
+  ".action-btn{width:100%;padding:14px;font-size:1.05rem;font-weight:700;font-family:inherit;"
+  "color:#fff;background:linear-gradient(135deg,var(--sc),var(--sh));border:none;border-radius:var(--r);"
+  "cursor:pointer;margin-top:18px;box-shadow:var(--sh-md);"
+  "transition:background .15s,box-shadow .15s;}"
+  ".action-btn:active{background:var(--sh);}"
+
+  // -- Hover (pointer devices only) --
+  "@media(hover:hover){"
+  ".page-btn:hover{background:var(--ph);box-shadow:var(--sh-md);}"
+  ".back-btn:hover{border-color:var(--ts);color:var(--tp);}"
+  ".save-btn:hover{background:var(--sh);box-shadow:var(--sh-md);}"
+  ".action-btn:hover{box-shadow:var(--sh-lg);}"
+  ".sb:hover{background:var(--ph);}"
+  "}"
+
+  // -- Focus visible (keyboard nav) --
+  ":focus-visible{outline:2px solid var(--bf);outline-offset:2px;}"
+
+  // -- Success overlay --
+  ".saved-overlay{position:fixed;top:0;left:0;right:0;bottom:0;"
+  "display:flex;align-items:center;justify-content:center;"
+  "background:rgba(0,0,0,.4);z-index:1000;opacity:1;transition:opacity .5s;}"
+  ".saved-inner{background:#fff;color:var(--sc);padding:32px 48px;"
+  "border-radius:var(--r);font-size:1.4rem;font-weight:700;"
+  "box-shadow:var(--sh-lg);text-align:center;}"
+
+  // -- Responsive --
+  "@media(min-width:480px){#inputs{padding:28px 32px;}}"
+  "@media(min-width:640px){body{padding:24px;}#inputs{padding:32px 40px;}}"
+
+  ;
+
+static const char WP_JS[] PROGMEM =
+  // Helper: display a message overlay (same style as Settings Saved)
+  // Tooltip toggle — close any other tooltip, then toggle this one with
+  // smart above/below positioning based on available space.
+  "function tipToggle(id,btn){"
+  "var c=document.querySelectorAll('.tt.open');"
+  "for(var i=0;i<c.length;i++){if(c[i].id!=='tt_'+id){c[i].classList.remove('open');c[i].style.cssText='';}}"
+  "var t=document.getElementById('tt_'+id);if(!t)return;"
+  "if(t.classList.contains('open')){t.classList.remove('open');t.style.cssText='';return;}"
+  // Portal: move tooltip to <body> so no ancestor can clip it. Position
+  // fixed in viewport coords; this side-steps every overflow/positioning
+  // edge case in form / sub-page / container CSS.
+  "if(t.parentNode!==document.body)document.body.appendChild(t);"
+  "var r=btn.getBoundingClientRect();"
+  "var vh=window.innerHeight,vw=window.innerWidth,m=16;"
+  "var below=vh-r.bottom-m,above=r.top-m;"
+  "var useBelow=below>=above;"
+  "var avail=useBelow?below:above;"
+  "var h=Math.max(140,Math.min(Math.floor(vh*0.7),avail));"
+  // Position fixed; pin horizontal width to roughly the form's max width
+  // centered horizontally. Vertical: anchor below icon if room, else above.
+  "var w=Math.min(vw-32,560);"
+  // Center horizontally over the viewport (same axis as the form container).
+  "var leftPx=Math.max(16,Math.floor((vw-w)/2));"
+  "t.style.position='fixed';"
+  "t.style.left=leftPx+'px';"
+  "t.style.right='auto';"
+  "t.style.width=w+'px';"
+  "t.style.maxHeight=h+'px';"
+  "if(useBelow){t.style.top=(r.bottom+8)+'px';t.style.bottom='auto';}"
+  "else{t.style.top='auto';t.style.bottom=(vh-r.top+8)+'px';}"
+  "t.classList.add('open');}"
+  // Edge/Chromium quirk: wheel events over an absolutely-positioned
+  // overflow:auto element sometimes route to the page underneath instead
+  // of the hovering scrollable child, leaving the tooltip unscrollable
+  // even though the content overflows correctly. iOS Safari has no such
+  // problem. Intercept wheel events inside any .tt-i and apply the delta
+  // manually, then preventDefault to stop the page from scrolling.
+  "document.addEventListener('wheel',function(e){"
+  "var t=e.target.closest('.tt-i');if(!t)return;"
+  "var m=t.scrollHeight-t.clientHeight;if(m<=0)return;"
+  "var n=t.scrollTop+e.deltaY;if(n<0)n=0;if(n>m)n=m;"
+  "if(n!==t.scrollTop){t.scrollTop=n;e.preventDefault();}"
+  "},{passive:false});"
+  // Close any open tooltip when the user touches the form anywhere outside
+  // an info icon. Tapping the tooltip box itself also closes it.
+  "document.addEventListener('click',function(e){"
+  "if(e.target.closest('.info'))return;"
+  "var c=document.querySelectorAll('.tt.open');"
+  "for(var i=0;i<c.length;i++)c[i].classList.remove('open');});"
+  "function showMsg(t){var e=document.querySelector('.saved-overlay');if(e)e.remove();"
+  "var o=document.createElement('div');o.className='saved-overlay';"
+  "o.innerHTML='<div class=\"saved-inner\">'+t+'</div>';"
+  "document.body.appendChild(o);"
+  "setTimeout(function(){o.style.opacity='0';setTimeout(function(){o.remove();},500);},3000);}"
+  // Reboot overlay: a Save callback that returns a "::RB::<msg>" body means the
+  // device is rebooting. Replace the page with the message, wait for it to come
+  // back (ping '/' until it answers), then go to the HOME page — same pattern as
+  // the action-button reload, but triggered from the Save path.
+  // Body may be "<url>|<msg>" — if it starts with http, the leading part up to
+  // the first '|' is the address the device will come back at (e.g. a newly-set
+  // static IP), which is probed cross-origin (no-cors) and then navigated to.
+  // Otherwise the target is the home page '/' at the current host.
+  "function wpReboot(m){var url='/',msg=m;"
+  "if(m&&m.indexOf('http')===0){var i=m.indexOf('|');if(i>0){url=m.substring(0,i);msg=m.substring(i+1);}}"
+  "var xo=(url!=='/');"
+  "document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+(msg||'Rebooting\\u2026')+'</div></div>';"
+  "var go=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);"
+  "var b=xo?url:'/';var u=b+(b.indexOf('?')<0?'?':'&')+'cb='+Date.now();"
+  "fetch(u,{cache:'no-store',mode:xo?'no-cors':'cors',signal:c.signal}).then(function(){clearTimeout(t);location.replace(url);}).catch(function(){clearTimeout(t);setTimeout(go,1500);});};"
+  "setTimeout(go,3000);}"
+  // Helper: process AJAX response — show overlay if body is not "OK"
+  "function chk(r){return r.text().then(function(m){"
+        "if(m&&m.indexOf('::RL::')===0){var msg=m.substr(6);if(msg)showMsg(msg);"
+        "try{sessionStorage.setItem('wpsy',window.scrollY);}catch(e){}"
+        "setTimeout(function(){location.replace(location.href);},msg?900:120);return;}"
+        "if(m&&m!=='OK')showMsg(m);"
+      "});}"
+  // Action button "confirm and clear" — fire-and-forget AJAX then replace
+  // entire body with the confirmation overlay.
+  // data-reload set: poll the server (1.5 s cadence, 4 s per-try timeout)
+  //   starting 3 s out, then go to the HOME page as soon as it answers. Goes
+  //   home (not location.reload of the current sub-page) because device-level
+  //   status lives on the home page. Covers the no-reboot case (server returns
+  //   quickly) and the reboot case (server comes back on new firmware).
+  //   data-statusfield also set: poll '/?field=<sf>' whose text body is the
+  //   action RESULT. The blocking action doesn't answer until it finishes, so
+  //   the first non-error reply is the real outcome; show it in the overlay
+  //   for ~5 s (so it doesn't depend on a home-page status box / cache / timing
+  //   window), then go home. "" or "OK" means no result → go home at once.
+  // data-reload unset: overlay fades out after 2 s (reboot/AP actions whose
+  //   message should linger; the server isn't coming back at the same URL).
+  "function actionClear(f,btn){fetch('/?field='+f+'&value=1');"
+  "document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';"
+  "if(btn.dataset.reload){var sf=btn.dataset.statusfield;"
+  // dest: where to land after the result. data-stay → back to the current
+  // sub-page URL (captured now, before we navigate); otherwise the home page.
+  "var dest=btn.dataset.stay?location.pathname:'/';"
+  // Go HOME, but wait until the device is actually serving again before
+  // navigating — a successful OTA reboots, so a blind redirect would land
+  // mid-reboot, fail, and strand the user on the sub-page. Ping '/' until it
+  // answers, then replace to home. No-reboot actions (already current) answer
+  // immediately, so this is effectively instant for them.
+  "var home=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);"
+  "fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace(dest);}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};"
+  "var show=function(m){var e=document.querySelector('.saved-inner');if(e&&m)e.innerHTML=m;setTimeout(home,m?5000:0);};"
+  "var poll=function(){var c=new AbortController();"
+  "var t=setTimeout(function(){c.abort();},4000);"
+  "var u=sf?('/?field='+sf+'&value='+Date.now()):'/?ping=1';"
+  "fetch(u,{cache:'no-store',signal:c.signal}).then(function(r){clearTimeout(t);"
+  // '::WAIT::' (optionally followed by interim status text) means the action
+  // is still running: show the text if there is any, and keep polling. Only
+  // a status-field action button can receive it, so the branch is emitted
+  // only on pages that carry one — every other page (notably long rule-table
+  // pages sized against a DRAM buffer) pays nothing for it.
+  // '::WAIT::' (optionally followed by interim status text) means the action
+  // is still running: show the text if there is any, and keep polling. Only a
+  // status-field action button ever receives it; harmless elsewhere. (Was
+  // emitted per page before 1.4.0; unconditional now that the script is a
+  // shared static file.)
+  "if(sf){r.text().then(function(m){"
+  "if(m.indexOf('::WAIT::')===0){var e=document.querySelector('.saved-inner'),w=m.substring(8);if(e&&w)e.textContent=w;setTimeout(poll,1500);return;}"
+  "show(m&&m!=='OK'?m:'');});}else{home();}})"
+  ".catch(function(){clearTimeout(t);setTimeout(poll,1500);});};setTimeout(poll,3000);return;}"
+  "setTimeout(function(){var o=document.querySelector('.saved-overlay');"
+  "if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}"
+  // Slider thumb/badge tinting: data-tc="r|g|b" = dynamic channel, else literal CSS color
+  "function stc(el){var tc=el.getAttribute('data-tc');if(!tc)return;var v=el.value;"
+  "var c=tc=='r'?'rgb('+v+',0,0)':tc=='g'?'rgb(0,'+v+',0)':tc=='b'?'rgb(0,0,'+v+')':tc;"
+  "el.style.setProperty('--tc',c);var b=document.getElementById(el.id+'_v');"
+  "if(b)b.style.setProperty('--tc',c);}"
+  "document.querySelectorAll('[data-tc]').forEach(function(el){stc(el);});"
+  // Field change senders — all use chk() so showMessage() works universally.
+  // _safeFetch wraps the fetch with a 3 s AbortController timeout and a silent
+  // catch. Without these, a single hung request (server busy / WiFi drop) can
+  // tie up Safari's per-origin connection slots (~6) and make subsequent
+  // slider / dropdown changes appear to "stop working" until the browser
+  // gives up ~30 s later. Failed/aborted requests are swallowed silently.
+  "function _safeFetch(url){var c=new AbortController();"
+  "var t=setTimeout(function(){c.abort();},3000);"
+  "return fetch(url,{signal:c.signal}).then(function(r){clearTimeout(t);return chk(r);})"
+  ".catch(function(){clearTimeout(t);});}"
+  // Per-field debouncer. Range inputs fire oninput continuously during a
+  // drag; coalesce to one send per ~150 ms of inactivity per field. clr()
+  // is the same idea for color pickers — parses '#RRGGBB' to int before
+  // send. Both share _rngT (keyed by field id, no collision).
+  "var _rngT={};function rng(el){var f=el.id;clearTimeout(_rngT[f]);"
+  "_rngT[f]=setTimeout(function(){send(f,el.value);},150);}"
+  "function clr(el){var f=el.id;clearTimeout(_rngT[f]);"
+  "_rngT[f]=setTimeout(function(){send(f,parseInt(el.value.substring(1),16));},150);}"
+  "function send(f,v){_safeFetch('/?field='+f+'&value='+v);}"
+  "function hm(f){var h=document.getElementById(f+'_h'),m=document.getElementById(f+'_m');"
+      "send(f,parseInt(h.value)*100+parseInt(m.value));}"
+  "function sendStr(f,v){_safeFetch('/?field='+f+'&value='+encodeURIComponent(v));}"
+  "function sendText(id){var m=document.getElementById(id);if(m&&m.value.trim()!=''){_safeFetch('/?field='+id+'&value='+encodeURIComponent(m.value.trim()));m.focus();}}"
+  // After a chk()-triggered reload (rule add/edit/delete) restore the scroll
+  // position so the form doesn't jump to the top, and scrollTo(0,...) re-pins
+  // horizontal to 0 so the left-right lock is honored. One-shot (key removed).
+  "try{var _y=sessionStorage.getItem('wpsy');if(_y!==null){sessionStorage.removeItem('wpsy');window.scrollTo(0,parseInt(_y)||0);}}catch(e){}"
+  ;
+
 // Static HTML render buffer — allocated once on heap via begin().
 // Shared across all instances.
 char* WebPanel::_htmlBuf = nullptr;
@@ -898,6 +1377,11 @@ void WebPanel::handleClient() {
       continue;
     }
 
+    // Static page assets (1.4.0). Before the non-form reject / captive redirect
+    // so the AP setup form's own stylesheet and script are never redirected.
+    if (req.indexOf("GET /wp.css") == 0) { handleAsset(client, "text/css", WP_CSS); continue; }
+    if (req.indexOf("GET /wp.js") == 0)  { handleAsset(client, "application/javascript", WP_JS); continue; }
+
     // Reject favicon and other non-form requests quickly. Don't count
     // favicon rejects in _reqRejected — iOS Safari requests /favicon.ico
     // on every page load and would otherwise inflate the counter with
@@ -1202,6 +1686,25 @@ void WebPanel::handleIcon(WiFiClient& client) {
   if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
   client.write((const uint8_t*)hdr, hn);
   writeAll(client, png, (int)len);   // flash is memory-mapped; chunked send
+  client.flush();
+  client.stop();
+  _reqOK++;
+}
+
+// GET /wp.css, /wp.js — the static page assets, straight from flash with no
+// render buffer involved (so they are available even when allocBuffer()
+// failed). Cached for a year; the ?v=WP_ASSET_VER on the page's URLs is the
+// cache key, the query is ignored here.
+void WebPanel::handleAsset(WiFiClient& client, const char* mime, const char* body) {
+  size_t len = strlen(body);
+  char hdr[192];
+  int hn = snprintf(hdr, sizeof(hdr),
+    "HTTP/1.1 200 OK\r\nContent-Type: %s; charset=utf-8\r\nContent-Length: %u\r\n"
+    "Cache-Control: max-age=31536000, immutable\r\nConnection: close\r\n\r\n", mime, (unsigned)len);
+  if (hn < 0) hn = 0;
+  if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
+  client.write((const uint8_t*)hdr, hn);
+  writeAll(client, (const uint8_t*)body, (int)len);   // flash is memory-mapped; chunked send
   client.flush();
   client.stop();
   _reqOK++;
@@ -2041,315 +2544,16 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("\">");
   }
   out("<title>"); out(docTitle); out("</title>");
-  out("<style>");
-
-  // -- Design tokens --
-  out(":root{");
-  out("--pc:#3b82f6;--ph:#2563eb;--pd:#1d4ed8;");
-  out("--sc:#10b981;--sh:#059669;");
-  out("--bg:#f1f5f9;--cb:#ffffff;");
-  out("--tp:#0f172a;--ts:#64748b;--tl:#94a3b8;");
-  out("--br:#e2e8f0;--bf:#3b82f6;");
-  out("--r:12px;--ri:10px;");
-  // NOTE: 'thumb' name (not 'ts') because --ts is already used for
-  // text-secondary color. Reusing --ts here made the thumb width
-  // collapse to an invalid value in dark mode where --ts is set to a
-  // color, causing sliders to be ungrabbable on iPhones in dark mode.
-  out("--th:"); out(_sliderTrack); out("px;--thumb:"); out(_sliderThumb); out("px;");
-  out("--sh-sm:0 1px 3px rgba(0,0,0,.08);");
-  out("--sh-md:0 4px 12px rgba(0,0,0,.1);");
-  out("--sh-lg:0 12px 28px rgba(0,0,0,.12);");
-  out("--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;");
-  // Tooltip surface (GitHub convention: dark in light mode, slightly lighter
-  // dark in dark mode so the bubble pops off the already-dark page).
-  out("--tt-bg:#0f172a;--tt-fg:#ffffff;");
-  out("}");
-  // -- Dark mode — redefine the design tokens. Triggers automatically when
-  //    the OS / browser is set to dark.
-  out("@media (prefers-color-scheme:dark){:root{");
-  out("--bg:#0f172a;--cb:#1e293b;");
-  out("--tp:#e2e8f0;--ts:#94a3b8;--tl:#64748b;");
-  out("--br:#334155;");
-  out("--tt-bg:#475569;--tt-fg:#ffffff;");
-  out("--sh-sm:0 1px 3px rgba(0,0,0,.4);");
-  out("--sh-md:0 4px 12px rgba(0,0,0,.5);");
-  out("--sh-lg:0 12px 28px rgba(0,0,0,.6);");
-  out("}}");
-
-  // -- Reset & base --
-  out("*{box-sizing:border-box;margin:0;padding:0;}");
-  out("html,body{overflow-x:hidden;max-width:100%;}");
-  // Stop the rubber-band over-scroll past the page's edges (both axes) so long
-  // pages (e.g. the Rule Editor) can't be flung off-screen vertically or panned
-  // sideways — they lock at their natural boundaries like the short pages. (iOS
-  // Safari support for this on the root scroller is version-dependent; harmless
-  // where unsupported.)
-  // touch-action blocks the horizontal-pan GESTURE at the touch layer. The
-  // overflow/overscroll rules above are ignored by captive-portal mini-
-  // browsers (iOS CNA / Android sign-in WebView — where the AP setup form
-  // renders), which let any page rubber-band sideways; touch-action IS
-  // honored there (WKWebView since iOS 13). pan-y keeps vertical scroll,
-  // pinch-zoom keeps zoom; no element in WebPanel or the rule table scrolls
-  // horizontally, and range sliders benefit (horizontal drags can't be
-  // claimed as page panning).
-  out("body{overscroll-behavior:none;touch-action:pan-y pinch-zoom;}");
-  // Bump the root font-size so all rem-based text scales up ~6%. Container
-  // max-width stays in px so the form's width is unchanged; only text grows.
-  out("html{font-size:17px;}");
-  out("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;");
-  out("background:var(--bg);color:var(--tp);line-height:1.6;padding:16px;");
-  out("-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}");
-
-  // -- Container --
-  // Clip HORIZONTAL overflow here so a child a few px wider than the viewport
-  // (a width:100% field + padding, or the iOS time input) can't pan the whole
-  // page sideways — iOS Safari doesn't reliably honor overflow-x:hidden on the
-  // root/body scroller, but does on a normal element like this. overflow-x:clip
-  // keeps overflow-y visible (no scroll container) so vertical page scroll is
-  // unchanged; the plain overflow-x:hidden is a fallback for browsers without
-  // clip. Tooltips are unaffected: open ones are position:fixed (escape the
-  // clip) and closed ones are collapsed to zero size.
-  out("#container{max-width:640px;margin:0 auto;background:var(--cb);");
-  out("border-radius:var(--r);box-shadow:var(--sh-lg);overflow-x:hidden;overflow-x:clip;}");
-
-  // -- Header --
-  out("#header{background:linear-gradient(135deg,var(--pc),var(--pd));");
-  out("color:#fff;text-align:center;font-size:clamp(1.1rem,5vw,1.7rem);font-weight:700;");
-  out("padding:8px 24px;letter-spacing:-.3px;line-height:1.1;white-space:nowrap;");
-  out("border-radius:var(--r) var(--r) 0 0;}");
-  out("#header .hl2{display:block;font-size:clamp(0.9rem,4vw,1.4rem);font-weight:500;");
-  out("opacity:0.92;margin-top:1px;letter-spacing:0;line-height:1.1;}");
-
-  // -- Form area --
-  out("#inputs{padding:24px;}");
-
-  // -- Field group --
-  out(".fg{margin-bottom:20px;position:relative;}");
-  out(".fl{display:block;font-size:.9rem;font-weight:600;color:var(--ts);");
-  out("text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}");
-
-  // -- Tooltip info icon and dark bubble tooltip --
-  out(".info{display:inline-block;margin-left:6px;font-size:1.1rem;");
-  out("color:var(--pc);cursor:pointer;user-select:none;line-height:1;}");
-  // Dark slate bubble — portal'd to <body> and positioned via JS (position:
-  // fixed, centered horizontally, vertical anchored to icon). Outer .tt is
-  // the flex container; inner .tt-i is the scrollable region with the
-  // scrollbar hidden (the wheel handler drives the scroll explicitly,
-  // which also works around an Edge bug where wheel events over an
-  // overflow:auto element sometimes route to the page underneath).
-  // position:absolute (default) keeps closed tooltips out of document flow;
-  // JS overrides to position:fixed when opening to portal them into body.
-  out(".tt{position:absolute;box-sizing:border-box;z-index:100;");
-  out("background:var(--tt-bg);color:var(--tt-fg);border:none;border-radius:12px;");
-  out("font-size:.9rem;font-weight:400;line-height:1.4;");
-  out("text-transform:none;letter-spacing:0;");
-  out("box-shadow:0 6px 16px rgba(0,0,0,.25);cursor:pointer;");
-  out("display:flex;flex-direction:column;");
-  out("opacity:0;visibility:hidden;");
-  out("transition:opacity .15s ease,visibility .15s;pointer-events:none;}");
-  out(".tt.open{opacity:1;visibility:visible;pointer-events:auto;}");
-  // Collapse CLOSED tooltips to zero box height. A closed .tt is position:
-  // absolute and invisible, but its box still extends the page's scrollable
-  // height — and a large tip (e.g. the Rule Editor's full schema doc) creates
-  // a big invisible scroll dead-zone you can scroll the form into / off. Only
-  // closed tips are collapsed; open tips are position:fixed (set by tipToggle)
-  // and unaffected by :not(.open), so this changes nothing about how tips show.
-  out(".tt:not(.open){max-height:0;overflow:hidden;}");
-  out(".tt-i{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;");
-  out("padding:10px 14px;overflow-wrap:anywhere;word-break:break-word;");
-  out("overscroll-behavior:contain;scrollbar-width:none;}");
-  out(".tt-i::-webkit-scrollbar{width:0;height:0;background:transparent;}");
-
-  // -- Inputs (shared) --
-  out("select,input[type=text],input[type=password],input[type=number],input[type=time]{");
-  out("width:100%;height:48px;padding:10px 14px;font-size:1rem;font-family:inherit;");
-  out("border:1.5px solid var(--br);border-radius:var(--ri);background:var(--cb);");
-  out("outline:none;color:var(--tp);transition:border-color .15s,box-shadow .15s;}");
-  // iOS Safari time input fix — native rendering adds internal padding that
-  // ignores box-sizing and overflows the container.
-  out("input[type=time]{-webkit-appearance:none;appearance:none;");
-  out("min-width:0;max-width:100%;box-sizing:border-box;}");
-  // addHourMinute: hours and minutes selects on one row, joined by a colon
-  out(".hm{display:flex;align-items:center;gap:10px;}.hm select{flex:1;min-width:0;}");
-  out(".hm b{font-size:1.25rem;color:var(--ts);}");
-  out("select:focus,input[type=text]:focus,input[type=password]:focus,");
-  out("input[type=number]:focus,input[type=time]:focus{");
-  out("border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,.15);}");
-
-  // -- Range slider (cross-browser) --
-  out(".rc{display:flex;align-items:center;gap:14px;}");
-  out("input[type=range]{flex:1;height:var(--th);appearance:none;-webkit-appearance:none;");
-  out("background:var(--br);border-radius:calc(var(--th)/2);outline:none;cursor:pointer;}");
-  out("input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;");
-  out("width:var(--thumb);height:var(--thumb);background:var(--tc,var(--pc));border-radius:50%;cursor:pointer;");
-  out("box-shadow:0 1px 4px rgba(0,0,0,.2);transition:transform .15s,background .1s;}");
-  out("input[type=range]::-moz-range-thumb{width:var(--thumb);height:var(--thumb);background:var(--tc,var(--pc));");
-  out("border-radius:50%;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2);}");
-  out("input[type=range]:active::-webkit-slider-thumb{transform:scale(1.15);}");
-  out("input[type=range]:active::-moz-range-thumb{transform:scale(1.15);}");
-  out(".rv{background:var(--tc,var(--pc));color:#fff;padding:2px 10px;border-radius:8px;");
-  out("font-size:.85rem;font-weight:700;min-width:32px;text-align:center;transition:background .1s;}");
-
-  // -- Color picker (cross-browser) --
-  out("input[type=color]{width:100%;height:48px;padding:3px;border:1.5px solid var(--br);");
-  out("border-radius:var(--ri);cursor:pointer;appearance:none;-webkit-appearance:none;");
-  out("background:var(--cb);transition:border-color .15s;}");
-  out("input[type=color]::-webkit-color-swatch-wrapper{padding:0;}");
-  out("input[type=color]::-webkit-color-swatch{border:none;border-radius:7px;}");
-  out("input[type=color]::-moz-color-swatch{border:none;border-radius:7px;}");
-  out("input[type=color]:focus,input[type=color]:hover{border-color:var(--bf);}");
-
-  // -- Subheading --
-  out(".sh{font-size:1.1rem;font-weight:700;color:var(--tp);");
-  out("margin:28px 0 16px 0;padding-bottom:8px;border-bottom:2px solid var(--br);}");
-  out(".sh:first-child{margin-top:0;}");
-
-  // -- Separator --
-  out(".sep{width:100%;height:1px;background:var(--br);margin:24px 0;}");
-
-  // -- Text input with button --
-  out(".tr{display:flex;gap:8px;align-items:center;}");
-  out(".tr input[type=text]{flex:1;}");
-  out(".sb{height:48px;padding:0 18px;font-size:1.05rem;font-weight:600;color:#fff;font-family:inherit;");
-  out("background:var(--pc);border:none;border-radius:var(--ri);cursor:pointer;");
-  out("white-space:nowrap;transition:background .15s;}");
-  out(".sb:active{background:var(--pd);}");
-  // -- Full-width button modifier (used by addButton and addTextInput's
-  //    Apply button when in textarea mode). Class-based so the buttons in
-  //    those flows don't carry inline style attributes.
-  out(".sb-block{width:100%;display:block;margin:10px 0;}");
-  // -- Inline clear "x", on addText and on single-line addTextInput. The
-  //    input is wrapped in .ti-wrap (position:relative) so .cx can sit
-  //    absolutely on the input's right edge. .ti-x adds padding-right on the
-  //    input so the typed text doesn't run under the x. iOS/Safari
-  //    clear-field convention: subtle gray glyph, only visible when the input
-  //    has content (toggled by the oninput handler).
-  //
-  //    SELECTOR SPECIFICITY IS LOAD-BEARING. This was ".tr input[type=text]
-  //    .ti-x", which ties with the later ".tr input[type=text]{...padding:
-  //    12px...}" block further down the sheet — equal specificity, later
-  //    wins, so the shorthand reset padding-right and long values ran under
-  //    the x. Anchoring on .ti-wrap (0,2,1) beats both and covers addText,
-  //    whose input is not inside a .tr at all.
-  out(".ti-wrap{position:relative;flex:1;min-width:0;display:flex;align-items:center;}");
-  out(".ti-wrap input[type=text].ti-x{padding-right:38px;}");
-  out(".cx{position:absolute;right:10px;top:50%;transform:translateY(-50%);");
-  out("color:var(--tl);font-size:1.25rem;line-height:1;cursor:pointer;");
-  out("user-select:none;-webkit-tap-highlight-color:transparent;");
-  out("padding:4px;transition:color .15s;}");
-  out(".cx:hover{color:var(--ts);}");
-  out(".cx:active{color:var(--tp);}");
-  // -- Textarea (multi-line input, rendered when rows>1 in addTextInput) --
-  out(".ta{width:100%;font-family:var(--mono);font-size:14px;padding:8px;");
-  out("border:1.5px solid var(--br);border-radius:var(--ri);background:var(--cb);");
-  out("color:var(--tp);resize:vertical;box-sizing:border-box;outline:none;");
-  out("transition:border-color .15s,box-shadow .15s;}");
-  out(".ta:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,.15);}");
-
-  // -- Password --
-  out(".pw{display:flex;align-items:center;gap:10px;}");
-  out(".pw input[type=password],.pw input[type=text]{flex:1;}");
-  out(".sp{display:flex;align-items:center;cursor:pointer;font-size:.8rem;");
-  out("color:var(--ts);white-space:nowrap;user-select:none;}");
-  out(".sp input[type=checkbox]{width:16px;height:16px;margin-right:5px;cursor:pointer;}");
-
-  // -- Checkbox --
-  out(".cb-group{margin-bottom:8px;}");
-  // width:fit-content shrinks the label to just its checkbox + text + icon so
-  // clicks in the empty space to the right of the row don't toggle the input.
-  out(".cb-label{display:flex;align-items:center;cursor:pointer;width:fit-content;max-width:100%;");
-  // Same look as the .fl heading above a dropdown/slider (uppercase, muted).
-  out("font-size:.9rem;font-weight:600;color:var(--ts);text-transform:uppercase;letter-spacing:.5px;");
-  out("padding:6px 0;min-height:44px;}");
-  out(".cb-label input[type=checkbox]{width:22px;height:22px;margin-right:12px;");
-  out("cursor:pointer;accent-color:var(--pc);}");
-
-  // -- Toggle switch (sliding pill; same 0/1 as checkbox) --
-  out(".sw-group{margin-bottom:8px;}");
-  // Label text on the left, the pill pushed to the right edge of the row.
-  out(".sw-label{display:flex;align-items:center;cursor:pointer;width:100%;max-width:100%;");
-  // Same look as the .fl heading above a dropdown/slider (uppercase, muted).
-  out("font-size:.9rem;font-weight:600;color:var(--ts);text-transform:uppercase;letter-spacing:.5px;");
-  out("padding:6px 0;min-height:44px;}");
-  out(".sw-text{flex:1;}");
-  // Hide the native checkbox; the track+knob spans render the control.
-  out(".sw-input{position:absolute;opacity:0;width:0;height:0;margin:0;}");
-  out(".sw-track{position:relative;flex:0 0 auto;width:46px;height:26px;border-radius:13px;");
-  out("background:var(--bd,#bbb);transition:background .2s;margin-left:12px;}");
-  out(".sw-knob{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;");
-  out("background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4);transition:left .2s;}");
-  out(".sw-input:checked + .sw-track{background:var(--pc);}");
-  out(".sw-input:checked + .sw-track .sw-knob{left:23px;}");
-
-  // -- Radio --
-  out(".rd-group{margin-bottom:4px;}");
-  out(".rd-label{display:flex;align-items:center;cursor:pointer;");
-  out("font-size:1rem;font-weight:500;color:var(--tp);padding:6px 0;min-height:44px;}");
-  out(".rd-label input[type=radio]{width:22px;height:22px;margin-right:12px;");
-  out("cursor:pointer;accent-color:var(--pc);}");
-
-  // -- Page nav button --
-  out(".page-btn{display:block;width:100%;padding:12px;font-size:1.05rem;font-weight:600;");
-  out("color:#fff;background:var(--pc);border:none;border-radius:var(--r);");
-  out("cursor:pointer;text-align:center;text-decoration:none;");
-  out("transition:background .15s,box-shadow .15s;margin-bottom:10px;box-shadow:var(--sh-sm);}");
-  out(".page-btn:active{background:var(--pd);}");
-
-  // -- Back button --
-  out(".back-btn{display:block;width:100%;padding:12px;font-size:1.05rem;font-weight:600;");
-  out("color:var(--ts);background:var(--bg);border:1.5px solid var(--br);");
-  out("border-radius:var(--r);cursor:pointer;text-align:center;text-decoration:none;");
-  out("transition:border-color .15s,color .15s;margin-top:12px;}");
-  out(".back-btn:active{border-color:var(--ts);color:var(--tp);}");
-
-  // -- Text input with send button --
-  out(".tr{display:flex;gap:10px;align-items:center;}");
-  out(".tr input[type=text]{flex:1;height:48px;padding:12px;font-size:1.1rem;");
-  out("border:2px solid var(--br);border-radius:8px;background:var(--cb);outline:none;}");
-  out(".tr input[type=text]:focus{border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,0.1);}");
-  out(".sb{height:48px;padding:0 20px;font-size:1.05rem;font-weight:600;color:#fff;");
-  out("background:var(--pc);border:none;border-radius:8px;cursor:pointer;white-space:nowrap;transition:background 0.2s;}");
-  out(".sb:active{background:var(--ph);}");
-
-  // -- Save button --
-  out(".save-btn{width:100%;padding:12px;font-size:1.05rem;font-weight:700;font-family:inherit;");
-  out("color:#fff;background:var(--sc);border:none;border-radius:var(--r);");
-  out("cursor:pointer;margin-top:16px;box-shadow:var(--sh-sm);");
-  out("transition:background .15s,box-shadow .15s;}");
-  out(".save-btn:active{background:var(--sh);}");
-
-  // -- Action button (e.g., Start) ---------------------------
-  out(".action-btn{width:100%;padding:14px;font-size:1.05rem;font-weight:700;font-family:inherit;");
-  out("color:#fff;background:linear-gradient(135deg,var(--sc),var(--sh));border:none;border-radius:var(--r);");
-  out("cursor:pointer;margin-top:18px;box-shadow:var(--sh-md);");
-  out("transition:background .15s,box-shadow .15s;}");
-  out(".action-btn:active{background:var(--sh);}");
-
-  // -- Hover (pointer devices only) --
-  out("@media(hover:hover){");
-  out(".page-btn:hover{background:var(--ph);box-shadow:var(--sh-md);}");
-  out(".back-btn:hover{border-color:var(--ts);color:var(--tp);}");
-  out(".save-btn:hover{background:var(--sh);box-shadow:var(--sh-md);}");
-  out(".action-btn:hover{box-shadow:var(--sh-lg);}");
-  out(".sb:hover{background:var(--ph);}");
-  out("}");
-
-  // -- Focus visible (keyboard nav) --
-  out(":focus-visible{outline:2px solid var(--bf);outline-offset:2px;}");
-
-  // -- Success overlay --
-  out(".saved-overlay{position:fixed;top:0;left:0;right:0;bottom:0;");
-  out("display:flex;align-items:center;justify-content:center;");
-  out("background:rgba(0,0,0,.4);z-index:1000;opacity:1;transition:opacity .5s;}");
-  out(".saved-inner{background:#fff;color:var(--sc);padding:32px 48px;");
-  out("border-radius:var(--r);font-size:1.4rem;font-weight:700;");
-  out("box-shadow:var(--sh-lg);text-align:center;}");
-
-  // -- Responsive --
-  out("@media(min-width:480px){#inputs{padding:28px 32px;}}");
-  out("@media(min-width:640px){body{padding:24px;}#inputs{padding:32px 40px;}}");
-
-  out("</style></head><body>");
+  // 1.4.0: the stylesheet and script are static, so they are served once as
+  // cached files (/wp.css, /wp.js — handleAsset()) instead of being rendered
+  // into every page. That takes ~16 KB out of each page render, which is what
+  // lets long pages fit a no-PSRAM DRAM buffer. setInlineAssets(true) restores
+  // the pre-1.4 inline form, byte for byte, from the same arrays.
+  if (_inlineAssets) { out("<style>"); out(WP_CSS); out("</style>"); }
+  else out("<link rel=\"stylesheet\" href=\"/wp.css?v=" WP_ASSET_VER "\">");
+  // Per-panel slider geometry (setSliderStyle) overrides the sheet's defaults.
+  out("<style>:root{--th:"); out(_sliderTrack); out("px;--thumb:"); out(_sliderThumb); out("px}</style>");
+  out("</head><body>");
   out("<div id=\"container\">");
   out("<div id=\"header\">"); out(displayLine1);
   if (displayLine2.length() > 0) {
@@ -2415,156 +2619,10 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   }
 
   out("</div></div>");
-  out("<script>");
-  // Helper: display a message overlay (same style as Settings Saved)
-  // Tooltip toggle — close any other tooltip, then toggle this one with
-  // smart above/below positioning based on available space.
-  out("function tipToggle(id,btn){");
-  out("var c=document.querySelectorAll('.tt.open');");
-  out("for(var i=0;i<c.length;i++){if(c[i].id!=='tt_'+id){c[i].classList.remove('open');c[i].style.cssText='';}}");
-  out("var t=document.getElementById('tt_'+id);if(!t)return;");
-  out("if(t.classList.contains('open')){t.classList.remove('open');t.style.cssText='';return;}");
-  // Portal: move tooltip to <body> so no ancestor can clip it. Position
-  // fixed in viewport coords; this side-steps every overflow/positioning
-  // edge case in form / sub-page / container CSS.
-  out("if(t.parentNode!==document.body)document.body.appendChild(t);");
-  out("var r=btn.getBoundingClientRect();");
-  out("var vh=window.innerHeight,vw=window.innerWidth,m=16;");
-  out("var below=vh-r.bottom-m,above=r.top-m;");
-  out("var useBelow=below>=above;");
-  out("var avail=useBelow?below:above;");
-  out("var h=Math.max(140,Math.min(Math.floor(vh*0.7),avail));");
-  // Position fixed; pin horizontal width to roughly the form's max width
-  // centered horizontally. Vertical: anchor below icon if room, else above.
-  out("var w=Math.min(vw-32,560);");
-  // Center horizontally over the viewport (same axis as the form container).
-  out("var leftPx=Math.max(16,Math.floor((vw-w)/2));");
-  out("t.style.position='fixed';");
-  out("t.style.left=leftPx+'px';");
-  out("t.style.right='auto';");
-  out("t.style.width=w+'px';");
-  out("t.style.maxHeight=h+'px';");
-  out("if(useBelow){t.style.top=(r.bottom+8)+'px';t.style.bottom='auto';}");
-  out("else{t.style.top='auto';t.style.bottom=(vh-r.top+8)+'px';}");
-  out("t.classList.add('open');}");
-  // Edge/Chromium quirk: wheel events over an absolutely-positioned
-  // overflow:auto element sometimes route to the page underneath instead
-  // of the hovering scrollable child, leaving the tooltip unscrollable
-  // even though the content overflows correctly. iOS Safari has no such
-  // problem. Intercept wheel events inside any .tt-i and apply the delta
-  // manually, then preventDefault to stop the page from scrolling.
-  out("document.addEventListener('wheel',function(e){");
-  out("var t=e.target.closest('.tt-i');if(!t)return;");
-  out("var m=t.scrollHeight-t.clientHeight;if(m<=0)return;");
-  out("var n=t.scrollTop+e.deltaY;if(n<0)n=0;if(n>m)n=m;");
-  out("if(n!==t.scrollTop){t.scrollTop=n;e.preventDefault();}");
-  out("},{passive:false});");
-  // Close any open tooltip when the user touches the form anywhere outside
-  // an info icon. Tapping the tooltip box itself also closes it.
-  out("document.addEventListener('click',function(e){");
-  out("if(e.target.closest('.info'))return;");
-  out("var c=document.querySelectorAll('.tt.open');");
-  out("for(var i=0;i<c.length;i++)c[i].classList.remove('open');});");
-  out("function showMsg(t){var e=document.querySelector('.saved-overlay');if(e)e.remove();");
-  out("var o=document.createElement('div');o.className='saved-overlay';");
-  out("o.innerHTML='<div class=\"saved-inner\">'+t+'</div>';");
-  out("document.body.appendChild(o);");
-  out("setTimeout(function(){o.style.opacity='0';setTimeout(function(){o.remove();},500);},3000);}");
-  // Reboot overlay: a Save callback that returns a "::RB::<msg>" body means the
-  // device is rebooting. Replace the page with the message, wait for it to come
-  // back (ping '/' until it answers), then go to the HOME page — same pattern as
-  // the action-button reload, but triggered from the Save path.
-  // Body may be "<url>|<msg>" — if it starts with http, the leading part up to
-  // the first '|' is the address the device will come back at (e.g. a newly-set
-  // static IP), which is probed cross-origin (no-cors) and then navigated to.
-  // Otherwise the target is the home page '/' at the current host.
-  out("function wpReboot(m){var url='/',msg=m;");
-  out("if(m&&m.indexOf('http')===0){var i=m.indexOf('|');if(i>0){url=m.substring(0,i);msg=m.substring(i+1);}}");
-  out("var xo=(url!=='/');");
-  out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+(msg||'Rebooting\\u2026')+'</div></div>';");
-  out("var go=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
-  out("var b=xo?url:'/';var u=b+(b.indexOf('?')<0?'?':'&')+'cb='+Date.now();");
-  out("fetch(u,{cache:'no-store',mode:xo?'no-cors':'cors',signal:c.signal}).then(function(){clearTimeout(t);location.replace(url);}).catch(function(){clearTimeout(t);setTimeout(go,1500);});};");
-  out("setTimeout(go,3000);}");
-  // Helper: process AJAX response — show overlay if body is not "OK"
-  out("function chk(r){return r.text().then(function(m){"
-        "if(m&&m.indexOf('::RL::')===0){var msg=m.substr(6);if(msg)showMsg(msg);"
-        "try{sessionStorage.setItem('wpsy',window.scrollY);}catch(e){}"
-        "setTimeout(function(){location.replace(location.href);},msg?900:120);return;}"
-        "if(m&&m!=='OK')showMsg(m);"
-      "});}");
-  // Action button "confirm and clear" — fire-and-forget AJAX then replace
-  // entire body with the confirmation overlay.
-  // data-reload set: poll the server (1.5 s cadence, 4 s per-try timeout)
-  //   starting 3 s out, then go to the HOME page as soon as it answers. Goes
-  //   home (not location.reload of the current sub-page) because device-level
-  //   status lives on the home page. Covers the no-reboot case (server returns
-  //   quickly) and the reboot case (server comes back on new firmware).
-  //   data-statusfield also set: poll '/?field=<sf>' whose text body is the
-  //   action RESULT. The blocking action doesn't answer until it finishes, so
-  //   the first non-error reply is the real outcome; show it in the overlay
-  //   for ~5 s (so it doesn't depend on a home-page status box / cache / timing
-  //   window), then go home. "" or "OK" means no result → go home at once.
-  // data-reload unset: overlay fades out after 2 s (reboot/AP actions whose
-  //   message should linger; the server isn't coming back at the same URL).
-  out("function actionClear(f,btn){fetch('/?field='+f+'&value=1');");
-  out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">'+btn.dataset.msg+'</div></div>';");
-  out("if(btn.dataset.reload){var sf=btn.dataset.statusfield;");
-  // dest: where to land after the result. data-stay → back to the current
-  // sub-page URL (captured now, before we navigate); otherwise the home page.
-  out("var dest=btn.dataset.stay?location.pathname:'/';");
-  // Go HOME, but wait until the device is actually serving again before
-  // navigating — a successful OTA reboots, so a blind redirect would land
-  // mid-reboot, fail, and strand the user on the sub-page. Ping '/' until it
-  // answers, then replace to home. No-reboot actions (already current) answer
-  // immediately, so this is effectively instant for them.
-  out("var home=function(){var c=new AbortController();var t=setTimeout(function(){c.abort();},3000);");
-  out("fetch('/?cb='+Date.now(),{cache:'no-store',signal:c.signal}).then(function(){clearTimeout(t);location.replace(dest);}).catch(function(){clearTimeout(t);setTimeout(home,1500);});};");
-  out("var show=function(m){var e=document.querySelector('.saved-inner');if(e&&m)e.innerHTML=m;setTimeout(home,m?5000:0);};");
-  out("var poll=function(){var c=new AbortController();");
-  out("var t=setTimeout(function(){c.abort();},4000);");
-  out("var u=sf?('/?field='+sf+'&value='+Date.now()):'/?ping=1';");
-  out("fetch(u,{cache:'no-store',signal:c.signal}).then(function(r){clearTimeout(t);");
-  // '::WAIT::' (optionally followed by interim status text) means the action
-  // is still running: show the text if there is any, and keep polling. Only
-  // a status-field action button can receive it, so the branch is emitted
-  // only on pages that carry one — every other page (notably long rule-table
-  // pages sized against a DRAM buffer) pays nothing for it.
-  bool waitJs = false;
-  for (int i = 0; i < _fieldCount; i++) {
-    const WPField& af = _fields[i];
-    if (af.page == page && af.type == WP_ACTION_BUTTON && af.reloadAfter && af.optionsCSV.length() > 0) { waitJs = true; break; }
-  }
-  out("if(sf){r.text().then(function(m){");
-  if (waitJs) out("if(m.indexOf('::WAIT::')===0){var e=document.querySelector('.saved-inner'),w=m.substring(8);if(e&&w)e.textContent=w;setTimeout(poll,1500);return;}");
-  out("show(m&&m!=='OK'?m:'');});}else{home();}})");
-  out(".catch(function(){clearTimeout(t);setTimeout(poll,1500);});};setTimeout(poll,3000);return;}");
-  out("setTimeout(function(){var o=document.querySelector('.saved-overlay');");
-  out("if(o){o.style.opacity='0';setTimeout(function(){if(o)o.remove();},500);}},2000);}");
-  // Slider thumb/badge tinting: data-tc="r|g|b" = dynamic channel, else literal CSS color
-  out("function stc(el){var tc=el.getAttribute('data-tc');if(!tc)return;var v=el.value;");
-  out("var c=tc=='r'?'rgb('+v+',0,0)':tc=='g'?'rgb(0,'+v+',0)':tc=='b'?'rgb(0,0,'+v+')':tc;");
-  out("el.style.setProperty('--tc',c);var b=document.getElementById(el.id+'_v');");
-  out("if(b)b.style.setProperty('--tc',c);}");
-  out("document.querySelectorAll('[data-tc]').forEach(function(el){stc(el);});");
-  // Field change senders — all use chk() so showMessage() works universally.
-  // _safeFetch wraps the fetch with a 3 s AbortController timeout and a silent
-  // catch. Without these, a single hung request (server busy / WiFi drop) can
-  // tie up Safari's per-origin connection slots (~6) and make subsequent
-  // slider / dropdown changes appear to "stop working" until the browser
-  // gives up ~30 s later. Failed/aborted requests are swallowed silently.
-  out("function _safeFetch(url){var c=new AbortController();");
-  out("var t=setTimeout(function(){c.abort();},3000);");
-  out("return fetch(url,{signal:c.signal}).then(function(r){clearTimeout(t);return chk(r);})");
-  out(".catch(function(){clearTimeout(t);});}");
-  // Per-field debouncer. Range inputs fire oninput continuously during a
-  // drag; coalesce to one send per ~150 ms of inactivity per field. clr()
-  // is the same idea for color pickers — parses '#RRGGBB' to int before
-  // send. Both share _rngT (keyed by field id, no collision).
-  out("var _rngT={};function rng(el){var f=el.id;clearTimeout(_rngT[f]);");
-  out("_rngT[f]=setTimeout(function(){send(f,el.value);},150);}");
-  out("function clr(el){var f=el.id;clearTimeout(_rngT[f]);");
-  out("_rngT[f]=setTimeout(function(){send(f,parseInt(el.value.substring(1),16));},150);}");
+  if (_inlineAssets) { out("<script>"); out(WP_JS); }
+  else out("<script src=\"/wp.js?v=" WP_ASSET_VER "\"></script><script>");
+  // Per-page script: field gating pairs and the Save variant depend on this
+  // panel's configuration, so they stay inline (a few hundred bytes).
   // Field gating (declared via gateFieldBy()): each entry below makes one
   // input disabled unless its controller field has the configured value.
   // No-op when no pairs are registered.
@@ -2586,11 +2644,6 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("c.addEventListener('change',u);u();");
     out("});");
   }
-  out("function send(f,v){_safeFetch('/?field='+f+'&value='+v);}");
-  out("function hm(f){var h=document.getElementById(f+'_h'),m=document.getElementById(f+'_m');"
-      "send(f,parseInt(h.value)*100+parseInt(m.value));}");
-  out("function sendStr(f,v){_safeFetch('/?field='+f+'&value='+encodeURIComponent(v));}");
-  out("function sendText(id){var m=document.getElementById(id);if(m&&m.value.trim()!=''){_safeFetch('/?field='+id+'&value='+encodeURIComponent(m.value.trim()));m.focus();}}");
   if (_rebootOnSave) {
     out("function save(){fetch('/?save=1');");
     out("document.body.innerHTML='<div class=\"saved-overlay\"><div class=\"saved-inner\">\\u2713 Settings Saved</div></div>';}");
@@ -2601,10 +2654,6 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("if(m&&m.indexOf('::RB::')===0){wpReboot(m.substr(6));return;}");
     out("var t=(m&&m!=='OK')?m:'\\u2713 Settings Saved';showMsg(t);});}");
   }
-  // After a chk()-triggered reload (rule add/edit/delete) restore the scroll
-  // position so the form doesn't jump to the top, and scrollTo(0,...) re-pins
-  // horizontal to 0 so the left-right lock is honored. One-shot (key removed).
-  out("try{var _y=sessionStorage.getItem('wpsy');if(_y!==null){sessionStorage.removeItem('wpsy');window.scrollTo(0,parseInt(_y)||0);}}catch(e){}");
   out("</script></body></html>");
 
   // A render that reached the buffer ceiling is a cut-off page — the browser

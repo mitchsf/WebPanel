@@ -288,6 +288,16 @@ void setPWA(bool enabled);
 ```
 Enable the PWA surface for this panel. **Default disabled** — an app that never calls this behaves byte-identically to the pre-PWA library (no routes, no head tags, browsers never learn the icon exists), so RAM-tight legacy apps are unaffected without any change. When enabled, RAM cost is still near zero: the icon is served straight from flash (+8 bytes static, ~280 bytes more head HTML in the existing render buffer); browsers pull the 28 KB icon roughly once per device due to the immutable cache header.
 
+### Static page assets (1.4.0)
+
+Since 1.4.0 the stylesheet and script that every page needs are not rendered into the page. The page links them as two files, `/wp.css` and `/wp.js`, which WebPanel serves straight from flash (no render buffer involved) with a one-year immutable cache. The URL carries `?v=WP_ASSET_VER`, so a library release that changes either file is a new cache key and no browser keeps a stale copy.
+
+This takes about 16 KB out of every page render: a page that was 28 KB is now 13 KB, which is what lets long pages (a full setup form, a Rule Editor table) fit the 28 to 34 KB DRAM buffer a no-PSRAM board can afford. The first page load of a session costs two extra requests; every page after that is roughly half the bytes. The only per-panel pieces left inline are the slider geometry (`setSliderStyle`), field-gating pairs and the Save variant, a few hundred bytes together.
+
+`setInlineAssets(true)` restores the pre-1.4 single-document page from the same arrays, for a client that cannot fetch sub-resources. It costs the 16 KB per render again. Both routes are served before the captive-portal redirect, so the AP setup form's own assets are never redirected, and they sit behind the same HTTP Basic Auth as the pages.
+
+When editing `WP_CSS` / `WP_JS` in `WebPanel.cpp`, bump `WP_ASSET_VER` in `WebPanel.h`.
+
 ### REST control: the /fields endpoint
 
 Every panel is already remote-controllable over plain HTTP GET — `/?field=<name>&value=<v>` sets one field (fires the change/text callback exactly as if the user moved the control) and `/?save=1` persists via the save callback. What a script can't know is *which* fields exist. `setFieldsEndpoint(true)` fixes that:

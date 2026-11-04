@@ -28,6 +28,11 @@
 
 #define WP_DEFAULT_FIELDS 80
 
+// Cache key for the static page assets (/wp.css, /wp.js). Bump whenever the
+// WP_CSS / WP_JS text in WebPanel.cpp changes — browsers cache the files for a
+// year and only the URL (…?v=WP_ASSET_VER) tells them a new copy exists.
+#define WP_ASSET_VER "140"
+
 // Max options parsed at render time (temporary stack array)
 #ifndef WP_MAX_OPTIONS
 #define WP_MAX_OPTIONS 50
@@ -190,6 +195,11 @@ public:
   // tags, browsers never learn the 28 KB icon exists). Opt in per panel:
   //   panel.setPWA(true);
   void setPWA(bool enabled);
+  // 1.4.0: pages link the stylesheet and script as cached files (/wp.css,
+  // /wp.js) instead of carrying ~16 KB of them inline. setInlineAssets(true)
+  // restores the pre-1.4 single-document page (same bytes) — a fallback for a
+  // client that cannot fetch sub-resources; costs the 16 KB per render again.
+  void setInlineAssets(bool on) { _inlineAssets = on; }
   // Enable GET /fields — a machine-readable JSON inventory of every settable
   // field: name, label, type, page, current value, and the constraints the
   // type carries (min/max/step, dropdown options, offset). Layout-only
@@ -435,6 +445,7 @@ private:
   bool   _mainHasFields;
   bool   _homeSaveHidden = false;                        // hidePageSaveButton(-1)
   bool   _rebootOnSave;
+  bool   _inlineAssets = false;   // setInlineAssets(): pre-1.4 inline CSS/JS
   String _saveLabel;       // overrides "Save Settings" button text when non-empty
   int    _sliderTrack;     // track height in px (default 6)
   int    _sliderThumb;     // thumb diameter in px (default 22)
@@ -472,6 +483,7 @@ private:
   void handleAjax(WiFiClient& client, const String& req);
   void handleSave(WiFiClient& client);
   void handleHealth(WiFiClient& client);
+  void handleAsset(WiFiClient& client, const char* mime, const char* body);  // GET /wp.css, /wp.js (1.4.0)
   void handleIcon(WiFiClient& client);      // GET /icon.png — app icon (setAppIcon override or built-in default)
   void handleManifest(WiFiClient& client);  // GET /manifest.json — PWA manifest built from the panel title
   const uint8_t* _appIconPng = nullptr;     // nullptr → serve the library default icon
