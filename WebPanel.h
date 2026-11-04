@@ -31,7 +31,7 @@
 // Cache key for the static page assets (/wp.css, /wp.js). Bump whenever the
 // WP_CSS / WP_JS text in WebPanel.cpp changes — browsers cache the files for a
 // year and only the URL (…?v=WP_ASSET_VER) tells them a new copy exists.
-#define WP_ASSET_VER "140"
+#define WP_ASSET_VER "142"
 
 // How long endResponse() waits for the browser to close its side before the
 // RST close (ms). Browsers close as soon as Content-Length is satisfied, so

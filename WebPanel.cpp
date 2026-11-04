@@ -53,7 +53,17 @@ static const char WP_CSS[] PROGMEM =
 
   // -- Reset & base --
   "*{box-sizing:border-box;margin:0;padding:0;}"
-  "html,body{overflow-x:hidden;max-width:100%;}"
+  // overflow-x on html ONLY. With a non-visible overflow on html, Chromium
+  // stops propagating body's overflow to the viewport and body becomes a
+  // scroll container of its own - one exactly as tall as its content, so it
+  // can never scroll. A mouse wheel over the form then landed on that dead
+  // container, and overscroll-behavior:none on the same element forbade the
+  // scroll from chaining up to the page: in Edge/Chrome the wheel only worked
+  // on the window scrollbar (field report, 2026-11-04). Both rules now sit on
+  // html, the element that actually scrolls; #container keeps the horizontal
+  // clip iOS relies on, and touch-action stays on body for the touch layer.
+  "html{overflow-x:hidden;max-width:100%;overscroll-behavior:none;}"
+  "body{max-width:100%;}"
   // Stop the rubber-band over-scroll past the page's edges (both axes) so long
   // pages (e.g. the Rule Editor) can't be flung off-screen vertically or panned
   // sideways — they lock at their natural boundaries like the short pages. (iOS
@@ -67,7 +77,7 @@ static const char WP_CSS[] PROGMEM =
   // pinch-zoom keeps zoom; no element in WebPanel or the rule table scrolls
   // horizontally, and range sliders benefit (horizontal drags can't be
   // claimed as page panning).
-  "body{overscroll-behavior:none;touch-action:pan-y pinch-zoom;}"
+  "body{touch-action:pan-y pinch-zoom;}"
   // Bump the root font-size so all rem-based text scales up ~6%. Container
   // max-width stays in px so the form's width is unchanged; only text grows.
   "html{font-size:17px;}"

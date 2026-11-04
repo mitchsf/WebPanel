@@ -300,6 +300,8 @@ When editing `WP_CSS` / `WP_JS` in `WebPanel.cpp`, bump `WP_ASSET_VER` in `WebPa
 
 **1.4.1 — response close.** Every response now ends by waiting (at most `WP_CLOSE_WAIT_MS`, 150 ms) for the browser to close its side before the reset close. A reset that reaches an iOS or macOS browser while response bytes are still unread in its receive buffer discards them; with 28 KB inline pages that race never happened, but the 10 KB stylesheet fits one burst and Safari rendered a first visit unstyled. Browsers close as soon as Content-Length is satisfied, so the wait is a few milliseconds in practice.
 
+**1.4.2 — mouse wheel in Chromium.** `overflow-x:hidden` and `overscroll-behavior:none` now sit on `html` only. With them on `body` as well, Chromium made `body` a scroll container of its own (as tall as its content, so never scrollable) and `overscroll-behavior:none` stopped the wheel chaining to the page: in Edge and Chrome the wheel only worked on the window scrollbar. `WP_ASSET_VER` is 142.
+
 ### REST control: the /fields endpoint
 
 Every panel is already remote-controllable over plain HTTP GET — `/?field=<name>&value=<v>` sets one field (fires the change/text callback exactly as if the user moved the control) and `/?save=1` persists via the save callback. What a script can't know is *which* fields exist. `setFieldsEndpoint(true)` fixes that:
