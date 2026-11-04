@@ -38,6 +38,7 @@ int scheduleOn    = 0700;
 int scheduleOff   = 2300;
 int dayOfWeek     = 0;
 int startSecond   = 30;
+int utcOffset     = 500;   // HHMM, addHourMinute
 int pirTimeout    = 3;
 int lightSensor   = 1;
 int minBrightness = 2;
@@ -169,6 +170,8 @@ void setup() {
     "Every Day, Weekdays, Weekends, Mon, Tue, Wed, Thu, Fri, Sat, Sun",
     &dayOfWeek);
   panel.addDropDownRange("Start Second", "startsec", 0, 59, &startSecond);
+  panel.addHourMinute("UTC Offset", "utcoff", &utcOffset, "0, 30, 45", 23,
+    "One control, hours and minutes, minutes limited to 0/30/45");
 
   panel.addSeparator();
 

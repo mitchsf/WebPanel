@@ -305,7 +305,7 @@ Serves `GET /fields`: a JSON inventory of every settable field. **Default disabl
 ]}
 ```
 
-Per field: `name` (the wire name for `/?field=`), `label`, `type` (`dropdown`, `dropdownRange`, `range`, `number`, `color`, `text`, `textInput`, `checkbox`, `toggle`, `radio`, `time`, `action`, `button`), `page` (-1 = home page), and the current `value` (int, or string for text types). Type-specific extras: `min`/`max`/`step` for range/number, `min`/`max` for dropdownRange, `options` array for dropdown/radio (plus `offset` for offset dropdowns — wire value = option index + offset), `maxLen` for capped text fields. Value conventions: toggles/checkboxes take 0/1, colors take an int RGB, time takes HHMM, action/button fields trigger with `value=1`.
+Per field: `name` (the wire name for `/?field=`), `label`, `type` (`dropdown`, `dropdownRange`, `range`, `number`, `color`, `text`, `textInput`, `checkbox`, `toggle`, `radio`, `time`, `hourMinute`, `action`, `button`), `page` (-1 = home page), and the current `value` (int, or string for text types). Type-specific extras: `min`/`max`/`step` for range/number, `min`/`max` for dropdownRange, `maxHours`/`minutes` for hourMinute (value is HHMM), `options` array for dropdown/radio (plus `offset` for offset dropdowns — wire value = option index + offset), `maxLen` for capped text fields. Value conventions: toggles/checkboxes take 0/1, colors take an int RGB, time takes HHMM, action/button fields trigger with `value=1`.
 
 Deliberately omitted: layout-only entries (subheadings, separators, raw HTML, page-nav buttons), hidden controls, controls whose visibility condition is false, and **password fields**. Omitted controls have no entry at all, including no name, label, or value.
 
@@ -383,6 +383,16 @@ void addDropDownRange(const String& label, const String& field,
                       const String& tip = "");
 ```
 Auto-generates a dropdown of integer values from `minVal` to `maxVal` inclusive. No CSV needed. Good for "Hour" (0..23), "Day" (1..31), etc.
+
+#### Hour : minute
+
+```cpp
+void addHourMinute(const String& label, const String& field, int* preset,
+                   const String& minuteOptions = "0, 30, 45",
+                   int maxHours = 23,
+                   const char* tip = nullptr);
+```
+One control for a value stored as `HHMM` (the same encoding as `addTime`): an hours select (0..`maxHours`) and a minutes select side by side under one label, posted as a single value under one field name. `minuteOptions` is the CSV of minutes offered, so a UTC offset can be limited to `0, 30, 45`. It is not a browser-native time input, so a phone set to 12-hour time never renders it with an AM/PM selector. A stored minute that is not on the list displays as the first entry and is left unchanged until the user touches the control. Added in 1.3.3.
 
 #### Range slider
 

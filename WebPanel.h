@@ -65,7 +65,8 @@ enum WPFieldType : uint8_t {
   WP_ACTION_BUTTON,
   WP_TEXT_INPUT,
   WP_HTML,
-  WP_BUTTON
+  WP_BUTTON,
+  WP_HOURMIN
 };
 
 struct WPField {
@@ -360,6 +361,16 @@ public:
   void addDropDownRange(const String& label, const String& field,
                         int minVal, int maxVal, int* preset,
                         const char* tip = nullptr);
+  // One control for an hour:minute value stored as HHMM (the addTime
+  // encoding): an hours select (0..maxHours) and a minutes select side by
+  // side under one label, posted as ONE value under ONE field name.
+  // minuteOptions is the CSV of minutes offered ("0, 30, 45" for a UTC
+  // offset). Not a browser-native time input, so a phone set to 12-hour
+  // time never renders it with AM/PM. 1.3.3+.
+  void addHourMinute(const String& label, const String& field, int* preset,
+                     const String& minuteOptions = "0, 30, 45",
+                     int maxHours = 23,
+                     const char* tip = nullptr);
   void addHidden(const String& field, int* preset);
 
   // In-page button. Unlike addActionButton (always renders on the home page),
@@ -523,6 +534,7 @@ private:
   void genTime(int idx);
   void genNumber(int idx);
   void genDropDownRange(int idx);
+  void genHourMinute(int idx);
   void genHidden(int idx);
   void genPageButton(int idx);
   void genActionButton(int idx);

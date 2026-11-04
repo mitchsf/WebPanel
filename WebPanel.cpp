@@ -644,6 +644,27 @@ void WebPanel::addRadio(const String& label, const String& field,
   if (_currentPage == -1) _mainHasFields = true;
 }
 
+void WebPanel::addHourMinute(const String& label, const String& field,
+                             int* preset, const String& minuteOptions,
+                             int maxHours, const char* tip) {
+  ensureFields();
+  if (_fieldCount >= _maxFields) return;
+  WPField& f = _fields[_fieldCount++];
+  f.type = WP_HOURMIN;
+  f.label = label;
+  f.fieldName = field;
+  f.minVal = 0;
+  f.maxVal = constrain(maxHours, 0, 99);
+  f.optionsCSV = minuteOptions;
+  f.optionCount = countOptions(minuteOptions);
+  f.presetPtr = preset;
+  f.strPtr = nullptr;
+  f.tip = tip;
+  f.condition = nullptr;
+  f.page = _currentPage;
+  if (_currentPage == -1) _mainHasFields = true;
+}
+
 void WebPanel::addTime(const String& label, const String& field,
                                int* preset, bool includeSeconds,
                                const char* tip) {
@@ -1051,6 +1072,7 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
       case WP_TOGGLE:          type = "toggle";        break;
       case WP_RADIO:           type = "radio";         break;
       case WP_TIME:            type = "time";          break;
+      case WP_HOURMIN:         type = "hourMinute";    break;
       case WP_NUMBER:          type = "number";        break;
       case WP_ACTION_BUTTON:   type = "action";        break;
       case WP_BUTTON:          type = "button";        break;
@@ -1079,6 +1101,17 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
         out(",\"min\":"); out(f.minVal);
         out(",\"max\":"); out(f.maxVal);
         break;
+      case WP_HOURMIN: {
+        // value is HHMM; hours 0..maxHours, minutes limited to this list
+        out(",\"maxHours\":"); out(f.maxVal);
+        out(",\"minutes\":[");
+        String mo[WP_MAX_OPTIONS];
+        int mc;
+        parseOptions(f.optionsCSV, mo, mc);
+        for (int i = 0; i < mc; i++) { if (i) out(","); out(mo[i].toInt()); }
+        out("]");
+        break;
+      }
       case WP_DROPDOWN_OFFSET:
         // value = option index + offset; expose the offset so a client can
         // map the options array back to wire values. Falls through to emit
@@ -1309,6 +1342,20 @@ void WebPanel::handleAjax(WiFiClient& client, const String& req) {
 
     if (f.type == WP_TIME) {
       // Value comes as HHMM integer from JS
+      if (f.presetPtr) *f.presetPtr = v;
+    }
+    else if (f.type == WP_HOURMIN) {
+      // HHMM from hm(): clamp the hours, snap an off-list minute (only a
+      // hand-crafted request can send one) to the first offered minute.
+      int h = constrain(v / 100, 0, (int)f.maxVal);
+      int m = v % 100;
+      String opts[WP_MAX_OPTIONS];
+      int count;
+      parseOptions(f.optionsCSV, opts, count);
+      bool listed = false;
+      for (int i = 0; i < count && !listed; i++) listed = (opts[i].toInt() == m);
+      if (!listed) m = count ? opts[0].toInt() : 0;
+      v = h * 100 + m;
       if (f.presetPtr) *f.presetPtr = v;
     }
     else if (f.type == WP_CHECKBOX || f.type == WP_TOGGLE) {
@@ -1795,6 +1842,50 @@ void WebPanel::genDropDownRange(int idx) {
   out("</select></div>");
 }
 
+void WebPanel::genHourMinute(int idx) {
+  WPField& f = _fields[idx];
+  int val = f.presetPtr ? *f.presetPtr : 0;
+  int hours = constrain(val / 100, 0, (int)f.maxVal);
+  int minutes = val % 100;
+  String opts[WP_MAX_OPTIONS];
+  int count;
+  parseOptions(f.optionsCSV, opts, count);
+  // A stored minute that is not on the list shows the first entry; the
+  // stored value is left alone until the user changes the control.
+  int mSel = 0;
+  for (int i = 0; i < count; i++) if (opts[i].toInt() == minutes) { mSel = i; break; }
+
+  out("<div class=\"fg\"><label class=\"fl\">");
+  out(f.label);
+  emitTipIcon(idx);
+  out("</label>");
+  emitTipBox(idx);
+  out("<div class=\"hm\"><select id=\"");
+  out(f.fieldName);
+  out("_h\" onchange=\"hm('");
+  out(f.fieldName);
+  out("')\">");
+  for (int h = 0; h <= f.maxVal; h++) {
+    out("<option value=\""); out(h); out("\"");
+    if (h == hours) out(" selected");
+    out(">"); out(h); out("</option>");
+  }
+  out("</select><b>:</b><select id=\"");
+  out(f.fieldName);
+  out("_m\" onchange=\"hm('");
+  out(f.fieldName);
+  out("')\">");
+  for (int i = 0; i < count; i++) {
+    int m = constrain(opts[i].toInt(), 0, 99);
+    char mb[3];
+    snprintf(mb, sizeof(mb), "%02d", m);
+    out("<option value=\""); out(m); out("\"");
+    if (i == mSel) out(" selected");
+    out(">"); out(mb); out("</option>");
+  }
+  out("</select></div></div>");
+}
+
 void WebPanel::genHidden(int idx) {
   WPField& f = _fields[idx];
   int val = f.presetPtr ? *f.presetPtr : 0;
@@ -2078,6 +2169,9 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   // ignores box-sizing and overflows the container.
   out("input[type=time]{-webkit-appearance:none;appearance:none;");
   out("min-width:0;max-width:100%;box-sizing:border-box;}");
+  // addHourMinute: hours and minutes selects on one row, joined by a colon
+  out(".hm{display:flex;align-items:center;gap:10px;}.hm select{flex:1;min-width:0;}");
+  out(".hm b{font-size:1.25rem;color:var(--ts);}");
   out("select:focus,input[type=text]:focus,input[type=password]:focus,");
   out("input[type=number]:focus,input[type=time]:focus{");
   out("border-color:var(--bf);box-shadow:0 0 0 3px rgba(59,130,246,.15);}");
@@ -2291,6 +2385,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
       case WP_TEXT_INPUT:       genTextInput(i);      break;
       case WP_HTML:             genHTML(i);           break;
       case WP_BUTTON:           genButton(i);         break;
+      case WP_HOURMIN:          genHourMinute(i);     break;
     }
   }
 
@@ -2492,6 +2587,8 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     out("});");
   }
   out("function send(f,v){_safeFetch('/?field='+f+'&value='+v);}");
+  out("function hm(f){var h=document.getElementById(f+'_h'),m=document.getElementById(f+'_m');"
+      "send(f,parseInt(h.value)*100+parseInt(m.value));}");
   out("function sendStr(f,v){_safeFetch('/?field='+f+'&value='+encodeURIComponent(v));}");
   out("function sendText(id){var m=document.getElementById(id);if(m&&m.value.trim()!=''){_safeFetch('/?field='+id+'&value='+encodeURIComponent(m.value.trim()));m.focus();}}");
   if (_rebootOnSave) {
