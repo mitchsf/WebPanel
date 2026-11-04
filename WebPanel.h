@@ -33,6 +33,13 @@
 // year and only the URL (…?v=WP_ASSET_VER) tells them a new copy exists.
 #define WP_ASSET_VER "140"
 
+// How long endResponse() waits for the browser to close its side before the
+// RST close (ms). Browsers close as soon as Content-Length is satisfied, so
+// the wait is normally a few ms; this only bounds a client that lingers.
+#ifndef WP_CLOSE_WAIT_MS
+#define WP_CLOSE_WAIT_MS 150
+#endif
+
 // Max options parsed at render time (temporary stack array)
 #ifndef WP_MAX_OPTIONS
 #define WP_MAX_OPTIONS 50
@@ -480,6 +487,7 @@ private:
   void parseOptions(const String& csv, String out[], int& count);
   void serveForm(WiFiClient& client, int page);
   void writeAll(WiFiClient& client, const uint8_t* buf, int len);  // chunked, slow-link-safe body send
+  void endResponse(WiFiClient& client);  // wait for the peer's close, then RST-close (1.4.1)
   void handleAjax(WiFiClient& client, const String& req);
   void handleSave(WiFiClient& client);
   void handleHealth(WiFiClient& client);

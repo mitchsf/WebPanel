@@ -6,6 +6,7 @@
 #include "WebPanelIcon.h"
 #include "mbedtls/base64.h"
 #include <sys/socket.h>
+#include <errno.h>
 
 // ---- Static page assets (1.4.0) ------------------------------------------
 // The CSS and JS every page needs, kept in flash (memory-mapped on ESP32) and
@@ -1400,13 +1401,11 @@ void WebPanel::handleClient() {
           "Content-Length: 0\r\nConnection: close\r\n\r\n",
           WiFi.softAPIP().toString().c_str());
         client.print(redir);
-        client.flush();
-        client.stop();
+        endResponse(client);
         continue;
       }
       client.print("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
-      client.flush();
-      client.stop();
+      endResponse(client);
       if (req.indexOf("favicon") < 0) _reqRejected++;
       continue;
     }
@@ -1488,8 +1487,7 @@ void WebPanel::handleHealth(WiFiClient& client) {
   if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
   client.write((const uint8_t*)hdr, hn);
   client.write((const uint8_t*)body, n);
-  client.flush();
-  client.stop();
+  endResponse(client);
   _reqOK++;
 }
 
@@ -1530,8 +1528,7 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
   if (!_htmlBuf) {
     client.print("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
                  "Content-Length: 2\r\nConnection: close\r\n\r\n{}");
-    client.flush();
-    client.stop();
+    endResponse(client);
     return;
   }
   _htmlPos = 0;
@@ -1640,8 +1637,7 @@ void WebPanel::handleFieldsJson(WiFiClient& client) {
     _htmlPos);
   client.print(headers);
   writeAll(client, (const uint8_t*)_htmlBuf, _htmlPos);
-  client.flush();
-  client.stop();
+  endResponse(client);
 }
 
 // GET /icon.png — the PWA / home-screen icon. Application override via
@@ -1686,8 +1682,7 @@ void WebPanel::handleIcon(WiFiClient& client) {
   if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
   client.write((const uint8_t*)hdr, hn);
   writeAll(client, png, (int)len);   // flash is memory-mapped; chunked send
-  client.flush();
-  client.stop();
+  endResponse(client);
   _reqOK++;
 }
 
@@ -1705,8 +1700,7 @@ void WebPanel::handleAsset(WiFiClient& client, const char* mime, const char* bod
   if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
   client.write((const uint8_t*)hdr, hn);
   writeAll(client, (const uint8_t*)body, (int)len);   // flash is memory-mapped; chunked send
-  client.flush();
-  client.stop();
+  endResponse(client);
   _reqOK++;
 }
 
@@ -1734,8 +1728,7 @@ void WebPanel::handleManifest(WiFiClient& client) {
   if (hn >= (int)sizeof(hdr)) hn = sizeof(hdr) - 1;
   client.write((const uint8_t*)hdr, hn);
   client.write((const uint8_t*)body, n);
-  client.flush();
-  client.stop();
+  endResponse(client);
   _reqOK++;
 }
 
@@ -1757,8 +1750,7 @@ void WebPanel::sendOK(WiFiClient& client) {
     bodyLen);
   client.print(headers);
   client.write((const uint8_t*)body, bodyLen);
-  client.flush();
-  client.stop();
+  endResponse(client);
   _pendingMessage = "";  // clear after sending
 }
 
@@ -1792,8 +1784,7 @@ void WebPanel::send401(WiFiClient& client) {
     "WWW-Authenticate: Basic realm=\"Settings\"\r\n"
     "Content-Length: 0\r\n"
     "Connection: close\r\n\r\n");
-  client.flush();
-  client.stop();
+  endResponse(client);
 }
 
 void WebPanel::handleSave(WiFiClient& client) {
@@ -2497,8 +2488,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
       "Content-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", blen);
     client.write((const uint8_t*)headers, hn);
     client.write((const uint8_t*)body, blen);
-    client.flush();
-    client.stop();
+    endResponse(client);
     return;
   }
 
@@ -2662,7 +2652,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
   _lastRenderTrunc = (_htmlPos >= _htmlBufSize - 1);
   if (_lastRenderTrunc) {
     client.print("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nPage exceeds available memory. Please restart the clock and retry.");
-    client.stop();
+    endResponse(client);
     return;
   }
 
@@ -2677,8 +2667,7 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
     _htmlPos);
   client.print(headers);
   writeAll(client, (const uint8_t*)_htmlBuf, _htmlPos);
-  client.flush();
-  client.stop();
+  endResponse(client);
 }
 
 // Stream a buffer to the client in segment-sized chunks with a progress-based
@@ -2689,6 +2678,32 @@ void WebPanel::serveForm(WiFiClient& client, int page) {
 // (e.g. /health, one segment) survive. Chunked send keeps pushing as the TCP
 // window drains and only gives up after a real stall, so it can't hang on a
 // dead client.
+// End a response. The socket was set SO_LINGER{1,0} at accept, so stop() closes
+// with a RST rather than a FIN (no TIME_WAIT on the ESP32's small pcb pool —
+// see handleClient). TCP semantics: a RST that reaches the peer while response
+// bytes are still unread in its receive buffer DISCARDS them. BSD stacks (iOS,
+// macOS) do exactly that; Windows and curl deliver the data first. It never
+// showed with 28 KB inline pages, which outran the receive window so the peer
+// had consumed everything before the last segment, but a 10 KB stylesheet fits
+// one burst and Safari rendered the first visit unstyled (1.4.0 field report).
+// So wait, bounded, for the browser to finish reading and close its side — it
+// does so as soon as Content-Length is satisfied, typically within a few ms on
+// a LAN — and only then RST-close. A client that keeps the connection open is
+// reset after WP_CLOSE_WAIT_MS as before.
+static bool peerClosed(WiFiClient& client) {
+  char b;
+  int r = recv(client.fd(), &b, 1, MSG_PEEK | MSG_DONTWAIT);
+  if (r == 0) return true;                                   // orderly FIN from the peer
+  if (r < 0) return errno != EWOULDBLOCK && errno != EAGAIN; // reset / abort: gone too
+  return false;                                              // unread request bytes: still open
+}
+
+void WebPanel::endResponse(WiFiClient& client) {
+  unsigned long t0 = millis();
+  while (client.connected() && !peerClosed(client) && millis() - t0 < WP_CLOSE_WAIT_MS) delay(1);
+  client.stop();
+}
+
 void WebPanel::writeAll(WiFiClient& client, const uint8_t* buf, int len) {
   const int CHUNK = 1460;            // ~one TCP segment
   int sent = 0;

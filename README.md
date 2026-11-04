@@ -298,6 +298,8 @@ This takes about 16 KB out of every page render: a page that was 28 KB is now 13
 
 When editing `WP_CSS` / `WP_JS` in `WebPanel.cpp`, bump `WP_ASSET_VER` in `WebPanel.h`.
 
+**1.4.1 — response close.** Every response now ends by waiting (at most `WP_CLOSE_WAIT_MS`, 150 ms) for the browser to close its side before the reset close. A reset that reaches an iOS or macOS browser while response bytes are still unread in its receive buffer discards them; with 28 KB inline pages that race never happened, but the 10 KB stylesheet fits one burst and Safari rendered a first visit unstyled. Browsers close as soon as Content-Length is satisfied, so the wait is a few milliseconds in practice.
+
 ### REST control: the /fields endpoint
 
 Every panel is already remote-controllable over plain HTTP GET — `/?field=<name>&value=<v>` sets one field (fires the change/text callback exactly as if the user moved the control) and `/?save=1` persists via the save callback. What a script can't know is *which* fields exist. `setFieldsEndpoint(true)` fixes that:
